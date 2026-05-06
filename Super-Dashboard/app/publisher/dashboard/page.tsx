@@ -1,0 +1,882 @@
+"use client";
+
+import {
+  Activity,
+  ArrowDownToLine,
+  CheckCircle2,
+  Clock3,
+  Code2,
+  Coins,
+  Copy,
+  ExternalLink,
+  Eye,
+  Key,
+  LayoutGrid,
+  MonitorPlay,
+  Plus,
+  Radar,
+  Server,
+  Sparkles,
+  TimerReset,
+  TrendingUp,
+  Wallet,
+  Wallet2,
+} from "lucide-react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import {
+  useAccount,
+  useReadContract,
+  useReadContracts,
+  useWaitForTransactionReceipt,
+  useWriteContract,
+} from "wagmi";
+
+import { LoadingScreen } from "@/components/loading-screen";
+import { MetricChartCard } from "@/components/metric-chart-card";
+import { PageHeader } from "@/components/page-header";
+import { StatCard } from "@/components/stat-card";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  contractAddresses,
+  vistaStreamAbi,
+  vistaVaultAbi,
+} from "@/lib/contracts";
+import { fetchJson } from "@/lib/http";
+import type { OnChainEarningRecord } from "@/lib/on-chain-helpers";
+import {
+  buildRecentSessions,
+  computePublisherStats,
+  computeRevenuePerDay,
+  computeSessionStats,
+  extractUniqueSessionIds,
+} from "@/lib/on-chain-helpers";
+import type { PublisherAnalyticsData, PublisherRecord } from "@/lib/types";
+import { formatUsdc, truncateAddress, truncateHash } from "@/lib/utils";
+
+// ─── Platform Card ─────────────────────────────────────────────────────────
+
+function PlatformCard({
+  publisher,
+  onSelect,
+}: {
+  publisher: PublisherRecord;
+  onSelect: () => void;
+}) {
+  const formattedDate = new Date(publisher.created_at).toLocaleDateString(
+    "en-US",
+    { year: "numeric", month: "short", day: "numeric" },
+  );
+
+  return (
+    <button
+      onClick={onSelect}
+      className="group w-full text-left rounded-2xl border border-border/60 bg-card p-5 hover:border-primary/50 hover:shadow-md hover:shadow-primary/5 transition-all duration-200"
+    >
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
+          <MonitorPlay className="size-5 text-primary" />
+        </div>
+        <Badge variant="outline" className="text-xs shrink-0">
+          Active
+        </Badge>
+      </div>
+
+      <h3 className="font-semibold text-base mb-1 group-hover:text-primary transition-colors">
+        {publisher.platform_name}
+      </h3>
+      <p className="text-xs text-muted-foreground font-mono truncate mb-3">
+        {publisher.api_key}
+      </p>
+      <p className="text-xs text-muted-foreground">Registered {formattedDate}</p>
+
+      <div className="mt-4 flex items-center gap-1.5 text-xs text-primary font-medium opacity-0 group-hover:opacity-100 transition-opacity">
+        View details
+        <ExternalLink className="size-3" />
+      </div>
+    </button>
+  );
+}
+
+// ─── Platform Detail Panel ──────────────────────────────────────────────────
+
+function PlatformDetailPanel({
+  publisher,
+  address,
+  onBack,
+}: {
+  publisher: PublisherRecord;
+  address: string;
+  onBack: () => void;
+}) {
+  const [detailTab, setDetailTab] = useState<"integration" | "apikey">(
+    "integration",
+  );
+
+  async function copy(text: string) {
+    await navigator.clipboard.writeText(text);
+    toast.success("Copied to clipboard.");
+  }
+
+  const envSnippet = `# .env (server-side, never expose to client)
+VISTA_API_KEY=${publisher.api_key}
+NEXT_PUBLIC_VISTA_ORACLE_URL=http://your-oracle-url:3300
+NEXT_PUBLIC_VISTA_PUBLISHER_WALLET=${address}`;
+
+  const initSnippet = `import { VistaSDK } from '@vista-protocol/sdk';
+
+// Initialize with your publisher credentials
+const vista = new VistaSDK({
+  publisherWallet: '${address}',
+  oracleUrl: process.env.NEXT_PUBLIC_VISTA_ORACLE_URL,
+});`;
+
+  const trackSnippet = `// When an ad becomes visible
+vista.attachZone('your-ad-zone-element-id', {
+  campaignId: campaign.campaign_id_onchain,
+  userWallet: user.address,
+});
+
+// When the ad is no longer visible
+vista.detachZone('your-ad-zone-element-id');`;
+
+  const integrationSteps = [
+    {
+      number: "01",
+      title: "Install the SDK",
+      desc: "Add the Vista Protocol SDK to your project.",
+      code: "npm install @vista-protocol/sdk",
+      lang: "bash",
+    },
+    {
+      number: "02",
+      title: "Configure environment",
+      desc: "Set your credentials as server-side environment variables.",
+      code: envSnippet,
+      lang: "bash",
+    },
+    {
+      number: "03",
+      title: "Initialize the SDK",
+      desc: "Bootstrap Vista at the app root level.",
+      code: initSnippet,
+      lang: "ts",
+    },
+    {
+      number: "04",
+      title: "Track ad zones",
+      desc: "Attach and detach zones as ads enter and leave the viewport.",
+      code: trackSnippet,
+      lang: "ts",
+    },
+  ];
+
+  return (
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-3 duration-300">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onBack}
+          className="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+        >
+          ← All Platforms
+        </button>
+        <span className="text-muted-foreground">/</span>
+        <span className="text-sm font-medium">{publisher.platform_name}</span>
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl border border-primary/20 bg-primary/5">
+        <div className="flex items-center gap-4">
+          <div className="size-12 rounded-xl bg-primary/15 flex items-center justify-center">
+            <MonitorPlay className="size-6 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold">{publisher.platform_name}</h2>
+            <p className="text-sm text-muted-foreground">
+              Registered{" "}
+              {new Date(publisher.created_at).toLocaleDateString("en-US", {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+              })}
+            </p>
+          </div>
+        </div>
+        <Badge className="self-start sm:self-auto px-3 py-1">Active</Badge>
+      </div>
+
+      {/* Sub-tabs */}
+      <div className="flex border-b border-border/50 overflow-x-auto">
+        <button
+          onClick={() => setDetailTab("integration")}
+          className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium transition-colors whitespace-nowrap ${
+            detailTab === "integration"
+              ? "border-b-2 border-primary text-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Code2 className="size-4" />
+          Integration Guide
+        </button>
+        <button
+          onClick={() => setDetailTab("apikey")}
+          className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium transition-colors whitespace-nowrap ${
+            detailTab === "apikey"
+              ? "border-b-2 border-primary text-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Key className="size-4" />
+          API Key
+        </button>
+      </div>
+
+      {detailTab === "apikey" && (
+        <div className="space-y-5 animate-in fade-in duration-200">
+          <Card className="border-amber-500/20 bg-amber-50/5">
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 mb-1">
+                <Key className="size-4" />
+                <span className="text-xs font-semibold uppercase tracking-wider">
+                  Secret Key
+                </span>
+              </div>
+              <CardTitle className="text-lg">Your API Key</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-xl border border-border/70 bg-muted/30 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <code className="text-sm font-mono break-all text-foreground">
+                  {publisher.api_key}
+                </code>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => copy(publisher.api_key)}
+                >
+                  <Copy className="size-3.5 mr-1.5" />
+                  Copy
+                </Button>
+              </div>
+              <div className="space-y-2.5 text-sm">
+                <p className="font-medium flex items-center gap-2">
+                  <Server className="size-4 text-muted-foreground" /> Security
+                  Best Practices
+                </p>
+                <ul className="space-y-2 text-muted-foreground">
+                  {[
+                    "Store this key in server-side environment variables only.",
+                    "Never embed this key in client-side JavaScript bundles.",
+                    "Rotate this key immediately if you suspect a leak.",
+                    "Use it to sign payloads sent to the Vista Oracle.",
+                  ].map((tip, i) => (
+                    <li key={i} className="flex gap-2.5">
+                      <CheckCircle2 className="size-4 text-green-500 shrink-0 mt-0.5" />
+                      {tip}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {detailTab === "integration" && (
+        <div className="space-y-5 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 mb-2">
+            <Sparkles className="size-4 text-blue-500" />
+            <p className="text-sm text-muted-foreground">
+              Follow these 4 steps to integrate Vista into{" "}
+              <span className="font-medium text-foreground">
+                {publisher.platform_name}
+              </span>
+              .
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            {integrationSteps.map((step) => (
+              <div
+                key={step.number}
+                className="rounded-2xl border border-border/60 bg-card overflow-hidden"
+              >
+                <div className="flex items-center gap-4 px-5 py-4 border-b border-border/40 bg-muted/20">
+                  <span className="text-2xl font-bold text-muted-foreground/30 font-mono tabular-nums">
+                    {step.number}
+                  </span>
+                  <div>
+                    <p className="font-semibold text-sm">{step.title}</p>
+                    <p className="text-xs text-muted-foreground">{step.desc}</p>
+                  </div>
+                </div>
+                <div className="relative">
+                  <pre className="overflow-x-auto p-5 text-xs leading-6 font-mono text-foreground bg-muted/10">
+                    {step.code}
+                  </pre>
+                  <button
+                    onClick={() => copy(step.code)}
+                    className="absolute top-3 right-3 size-7 flex items-center justify-center rounded-md border border-border/60 bg-background/80 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                    title="Copy snippet"
+                  >
+                    <Copy className="size-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Analytics Tab ──────────────────────────────────────────────────────────
+
+function AnalyticsTab({
+  onChainRevenuePerDay,
+  recentSessions,
+  totalWithdrawn,
+  onChainStats,
+  sessionStats,
+  onChainBalance,
+  isWithdrawing,
+  isWithdrawn,
+  withdrawError,
+  hasVaultBalance,
+  handleWithdraw,
+  isConfirming,
+  address,
+}: any) {
+  const [analyticsData, setAnalyticsData] =
+    useState<PublisherAnalyticsData | null>(null);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
+
+  useEffect(() => {
+    if (!address) return;
+    setIsLoadingAnalytics(true);
+    fetchJson<PublisherAnalyticsData>(`/api/publishers/${address}/analytics`)
+      .then(setAnalyticsData)
+      .catch(() => {})
+      .finally(() => setIsLoadingAnalytics(false));
+  }, [address]);
+
+  return (
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+      {/* On-chain overview stats */}
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          icon={Coins}
+          title="Total USDC Withdrawn"
+          value={formatUsdc(totalWithdrawn)}
+          format="usdc"
+        />
+        <StatCard
+          icon={Eye}
+          title="Total ad impressions"
+          value={onChainStats.totalAdImpressions}
+        />
+        <StatCard
+          icon={TimerReset}
+          title="Total viewer-seconds"
+          value={sessionStats.totalViewerSeconds}
+        />
+        <StatCard
+          icon={Activity}
+          title="Active sessions now"
+          value={sessionStats.activeSessions}
+        />
+      </div>
+
+      {/* Vault withdraw card */}
+      <Card>
+        <CardContent className="p-6">
+          <div className="flex flex-wrap items-start justify-between gap-6">
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
+                  Vault balance
+                </p>
+                <p className="mt-1 text-3xl font-semibold tabular-nums">
+                  {formatUsdc(Number(onChainBalance ?? 0) / 1_000_000)}{" "}
+                  <span className="text-sm font-normal text-muted-foreground">
+                    USDC
+                  </span>
+                </p>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Accumulated revenue share from ad sessions — withdraw any time.
+              </p>
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <Button
+                onClick={handleWithdraw}
+                disabled={
+                  !hasVaultBalance ||
+                  isWithdrawing ||
+                  !contractAddresses.vistaVault
+                }
+                size="lg"
+              >
+                {isWithdrawing ? (
+                  <>
+                    <ArrowDownToLine className="animate-pulse" />
+                    {isConfirming ? "Confirming…" : "Withdrawing…"}
+                  </>
+                ) : (
+                  <>
+                    <Wallet />
+                    Withdraw to wallet
+                  </>
+                )}
+              </Button>
+              {isWithdrawn && (
+                <p className="text-xs text-green-600 dark:text-green-400">
+                  Withdrawal confirmed!
+                </p>
+              )}
+              {withdrawError && (
+                <p className="max-w-xs text-right text-xs text-destructive">
+                  {withdrawError.message.split("\n")[0]}
+                </p>
+              )}
+              {!hasVaultBalance && !isWithdrawn && (
+                <p className="text-xs text-muted-foreground">
+                  No balance to withdraw
+                </p>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Revenue per day chart */}
+      <MetricChartCard
+        data={onChainRevenuePerDay}
+        description="Daily publisher revenue from on-chain VistaVault earning records."
+        title="Revenue per day"
+        valueFormatter={(value: number) => `${formatUsdc(value)} USDC`}
+      />
+
+      {/* Deep analytics from DB */}
+      {isLoadingAnalytics ? (
+        <div className="h-40 rounded-2xl border border-border/40 bg-muted/20 animate-pulse" />
+      ) : analyticsData ? (
+        <>
+          {/* Deep stat cards */}
+          <div className="grid gap-4 md:grid-cols-3">
+            <StatCard
+              icon={Wallet2}
+              title="Campaigns tracked"
+              value={analyticsData.breakdownByCampaign.length}
+            />
+            <StatCard
+              icon={Clock3}
+              title="Avg session duration"
+              value={analyticsData.averageSessionDuration}
+            />
+            <StatCard
+              icon={Radar}
+              title="Top time slots"
+              value={analyticsData.topTimeSlots.length}
+            />
+          </div>
+
+          {/* Time slots + campaign breakdown */}
+          <div className="grid gap-6 xl:grid-cols-2">
+            <MetricChartCard
+              data={analyticsData.topTimeSlots.map((slot) => ({
+                date: String(slot.hour),
+                label: slot.label,
+                value: slot.revenue,
+              }))}
+              description="Highest revenue windows based on stream_ticks grouped by hour."
+              kind="bar"
+              title="Top performing time slots"
+              valueFormatter={(value: number) => `${formatUsdc(value)} USDC`}
+            />
+
+            <div className="rounded-[28px] border border-border/70 bg-card/90 p-4 sm:p-6">
+              <div className="mb-4">
+                <h2 className="text-xl font-semibold tracking-tight">
+                  Revenue by campaign
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  Campaign-level earnings attributed to this publisher.
+                </p>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Campaign</TableHead>
+                    <TableHead>Revenue</TableHead>
+                    <TableHead>Impressions</TableHead>
+                    <TableHead>Viewer-s</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {analyticsData.breakdownByCampaign.map((campaign) => (
+                    <TableRow key={campaign.campaignIdOnchain}>
+                      <TableCell>
+                        <div className="space-y-0.5">
+                          <p className="font-medium text-sm">
+                            {campaign.campaignTitle}
+                          </p>
+                          <p className="text-xs text-muted-foreground font-mono">
+                            {campaign.campaignIdOnchain.slice(0, 10)}…
+                          </p>
+                        </div>
+                      </TableCell>
+                      <TableCell>{formatUsdc(campaign.revenue)}</TableCell>
+                      <TableCell>{campaign.impressions}</TableCell>
+                      <TableCell>{campaign.viewerSeconds}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {/* Recent sessions */}
+      <div className="rounded-[28px] border border-border/70 bg-card/90 p-4 sm:p-6">
+        <div className="mb-4">
+          <h2 className="text-xl font-semibold tracking-tight">
+            Recent sessions
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Latest sessions attributed to this publisher wallet.
+          </p>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Session ID</TableHead>
+              <TableHead>User wallet</TableHead>
+              <TableHead>Duration</TableHead>
+              <TableHead>Earned</TableHead>
+              <TableHead>Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {recentSessions.map((session: any) => (
+              <TableRow key={session.id}>
+                <TableCell className="font-medium">
+                  {truncateHash(session.sessionIdOnchain)}
+                </TableCell>
+                <TableCell>{truncateAddress(session.userWallet)}</TableCell>
+                <TableCell>{session.secondsVerified}s</TableCell>
+                <TableCell>{formatUsdc(session.publisherAmount ?? 0)}</TableCell>
+                <TableCell>
+                  <Badge
+                    variant={
+                      session.status === "active" ? "default" : "outline"
+                    }
+                  >
+                    {session.status}
+                  </Badge>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Page ──────────────────────────────────────────────────────────────
+
+export default function PublisherDashboardPage() {
+  const { address } = useAccount();
+  const [activeTab, setActiveTab] = useState<"dashboard" | "analytics">(
+    "dashboard",
+  );
+  const [publishers, setPublishers] = useState<PublisherRecord[]>([]);
+  const [isLoadingPublishers, setIsLoadingPublishers] = useState(true);
+  const [selectedPublisher, setSelectedPublisher] =
+    useState<PublisherRecord | null>(null);
+  const [totalWithdrawn, setTotalWithdrawn] = useState(0);
+  const withdrawalAmountRef = useRef(0);
+
+  const {
+    writeContract,
+    data: withdrawTxHash,
+    isPending: isWithdrawPending,
+    error: withdrawError,
+    reset: resetWithdraw,
+  } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess: isWithdrawn } =
+    useWaitForTransactionReceipt({ hash: withdrawTxHash });
+
+  // Fetch platforms
+  useEffect(() => {
+    if (!address) return;
+    setIsLoadingPublishers(true);
+    fetch(`/api/publishers?wallet=${address}`)
+      .then((r) => r.json())
+      .then((data) => setPublishers(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setIsLoadingPublishers(false));
+  }, [address]);
+
+  const fetchTotalWithdrawn = useCallback(async () => {
+    if (!address) return;
+    const res = await fetch(`/api/publisher/withdrawal?wallet=${address}`);
+    if (res.ok) {
+      const data = (await res.json()) as { totalWithdrawn: number };
+      setTotalWithdrawn(data.totalWithdrawn ?? 0);
+    }
+  }, [address]);
+
+  useEffect(() => {
+    void fetchTotalWithdrawn();
+  }, [fetchTotalWithdrawn]);
+
+  // ─── On-chain reads ────────────────────────────────────────────
+  const { data: onChainBalance, refetch: refetchBalance } = useReadContract({
+    address: contractAddresses.vistaVault ?? undefined,
+    abi: vistaVaultAbi,
+    functionName: "getBalance",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(address && contractAddresses.vistaVault) },
+  });
+
+  const { data: earningRecords, isLoading: isLoadingRecords } = useReadContract(
+    {
+      address: contractAddresses.vistaVault ?? undefined,
+      abi: vistaVaultAbi,
+      functionName: "getEarningRecords",
+      args: address ? [address] : undefined,
+      query: { enabled: Boolean(address && contractAddresses.vistaVault) },
+    },
+  );
+
+  const sessionIds = useMemo(
+    () =>
+      extractUniqueSessionIds(
+        earningRecords as readonly OnChainEarningRecord[] | undefined,
+      ),
+    [earningRecords],
+  );
+
+  const sessionContracts = useMemo(
+    () =>
+      sessionIds.map((id) => ({
+        address: contractAddresses.vistaStream!,
+        abi: vistaStreamAbi,
+        functionName: "sessions" as const,
+        args: [id] as const,
+      })),
+    [sessionIds],
+  );
+
+  const { data: sessionResults, isLoading: isLoadingSessions } =
+    useReadContracts({
+      contracts: sessionContracts,
+      query: {
+        enabled:
+          sessionIds.length > 0 && Boolean(contractAddresses.vistaStream),
+      },
+    });
+
+  const typedEarningRecords = earningRecords as
+    | readonly OnChainEarningRecord[]
+    | undefined;
+
+  const onChainStats = useMemo(
+    () => computePublisherStats(typedEarningRecords),
+    [typedEarningRecords],
+  );
+  const onChainRevenuePerDay = useMemo(
+    () => computeRevenuePerDay(typedEarningRecords),
+    [typedEarningRecords],
+  );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const typedSessionResults = sessionResults as any;
+  const sessionStats = useMemo(
+    () => computeSessionStats(typedSessionResults),
+    [typedSessionResults],
+  );
+  const recentSessions = useMemo(
+    () => buildRecentSessions(typedSessionResults, typedEarningRecords),
+    [typedSessionResults, typedEarningRecords],
+  );
+
+  // ─── Withdraw ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isWithdrawn) return;
+    void refetchBalance();
+    if (address && withdrawalAmountRef.current > 0) {
+      void fetch("/api/publisher/withdrawal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: address,
+          amount: withdrawalAmountRef.current,
+          withdrawnAt: new Date().toISOString(),
+        }),
+      }).then(() => void fetchTotalWithdrawn());
+      withdrawalAmountRef.current = 0;
+    }
+  }, [isWithdrawn, refetchBalance, address, fetchTotalWithdrawn]);
+
+  function handleWithdraw() {
+    if (!contractAddresses.vistaVault) return;
+    withdrawalAmountRef.current = Number(onChainBalance ?? 0) / 1_000_000;
+    resetWithdraw();
+    writeContract({
+      address: contractAddresses.vistaVault,
+      abi: vistaVaultAbi,
+      functionName: "withdraw",
+    });
+  }
+
+  const isLoading =
+    isLoadingRecords || (sessionIds.length > 0 && isLoadingSessions);
+
+  if (isLoading) {
+    return (
+      <LoadingScreen description="Loading publisher revenue, active sessions, and daily trend lines." />
+    );
+  }
+
+  const vaultBalanceRaw = Number(onChainBalance ?? 0);
+  const hasVaultBalance = vaultBalanceRaw > 0;
+  const isWithdrawing = isWithdrawPending || isConfirming;
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Publisher dashboard"
+        title="Monetization Performance"
+        description="Manage your registered platforms, track impressions, and withdraw USDC revenue."
+      />
+
+      {/* Tabs */}
+      <div className="flex border-b border-border/50 overflow-x-auto">
+        <button
+          onClick={() => { setActiveTab("dashboard"); setSelectedPublisher(null); }}
+          className={`flex items-center gap-2 px-6 py-3 font-medium text-sm transition-colors whitespace-nowrap ${
+            activeTab === "dashboard"
+              ? "border-b-2 border-primary text-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <LayoutGrid className="size-4" />
+          Dashboard
+        </button>
+        <button
+          onClick={() => { setActiveTab("analytics"); setSelectedPublisher(null); }}
+          className={`flex items-center gap-2 px-6 py-3 font-medium text-sm transition-colors whitespace-nowrap ${
+            activeTab === "analytics"
+              ? "border-b-2 border-primary text-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <TrendingUp className="size-4" />
+          Analytics
+        </button>
+      </div>
+
+      {/* ── Dashboard Tab ── */}
+      {activeTab === "dashboard" && (
+        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {selectedPublisher ? (
+            <PlatformDetailPanel
+              publisher={selectedPublisher}
+              address={address ?? ""}
+              onBack={() => setSelectedPublisher(null)}
+            />
+          ) : (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-semibold">Your Platforms</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Click a platform to view its integration guide and API key.
+                  </p>
+                </div>
+                <Link
+                  href="/publisher/onboarding"
+                  className={buttonVariants({ size: "sm" })}
+                >
+                  <Plus className="size-4 mr-1.5" />
+                  Register new platform
+                </Link>
+              </div>
+
+              {isLoadingPublishers ? (
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {[1, 2].map((i) => (
+                    <div
+                      key={i}
+                      className="h-44 rounded-2xl border border-border/40 bg-muted/20 animate-pulse"
+                    />
+                  ))}
+                </div>
+              ) : publishers.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-border p-16 text-center">
+                  <MonitorPlay className="size-10 text-muted-foreground/40 mx-auto mb-3" />
+                  <p className="font-medium mb-1">No platforms registered yet</p>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Register your first platform to get an API key and start
+                    earning.
+                  </p>
+                  <Link
+                    href="/publisher/onboarding"
+                    className={buttonVariants({ size: "sm" })}
+                  >
+                    <Plus className="size-4 mr-1.5" />
+                    Register a platform
+                  </Link>
+                </div>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {publishers.map((pub) => (
+                    <PlatformCard
+                      key={pub.id}
+                      publisher={pub}
+                      onSelect={() => setSelectedPublisher(pub)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Analytics Tab ── */}
+      {activeTab === "analytics" && (
+        <AnalyticsTab
+          onChainRevenuePerDay={onChainRevenuePerDay}
+          recentSessions={recentSessions}
+          totalWithdrawn={totalWithdrawn}
+          onChainStats={onChainStats}
+          sessionStats={sessionStats}
+          onChainBalance={onChainBalance}
+          isWithdrawing={isWithdrawing}
+          isWithdrawn={isWithdrawn}
+          withdrawError={withdrawError}
+          hasVaultBalance={hasVaultBalance}
+          handleWithdraw={handleWithdraw}
+          isConfirming={isConfirming}
+          address={address}
+        />
+      )}
+    </div>
+  );
+}

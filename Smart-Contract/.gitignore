@@ -1,0 +1,20 @@
+# Compiler files
+cache/
+out/
+
+# Broadcast logs
+broadcast/
+
+# Environments
+.env
+.env.*
+
+# Node & Build
+node_modules/
+dist/
+
+# OS Files
+.DS_Store
+*.log
+
+.lib/lib/

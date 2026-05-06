@@ -1,0 +1,18 @@
+{
+  "name": "ponder-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "rm -rf .ponder && node ./node_modules/.bin/ponder dev",
+    "start": "node ./node_modules/.bin/ponder start --schema public",
+    "codegen": "node ./node_modules/.bin/ponder codegen"
+  },
+  "dependencies": {
+    "ponder": "latest",
+    "viem": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+broadcast/
+cache/
+out/
+.next/
+.ponder/
+dist/
+build/
+coverage/
+.env*
+*.log
+.DS_Store
+Smart-Contract/lib/
