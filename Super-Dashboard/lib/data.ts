@@ -2,6 +2,8 @@ import { roleMeta } from "@/lib/constants";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import type {
   ActiveCampaignResult,
+  AttentionScoreBreakdown,
+  AttentionScoreResult,
   AdvertiserDashboardData,
   AdvertiserRecord,
   CampaignAudienceAnalytics,
@@ -44,6 +46,19 @@ import {
 type RoleRecord = AdvertiserRecord | PublisherRecord | UserRecord;
 
 const nowIso = () => new Date().toISOString();
+const ATTENTION_SECONDS_TARGET = 3600;
+const ATTENTION_CATEGORY_TARGET = 5;
+const ATTENTION_CONSISTENCY_MIN_SECONDS = 5;
+const ATTENTION_SCORE_WEIGHTS = {
+  totalSeconds: 0.45,
+  consistency: 0.25,
+  categoryDiversity: 0.2,
+  antiBot: 0.1,
+};
+
+function clamp01(value: number) {
+  return Math.min(1, Math.max(0, value));
+}
 
 function normalizeCampaign(row: Record<string, unknown>): CampaignRecord {
   return {
@@ -107,6 +122,9 @@ function normalizeReceipt(row: Record<string, unknown>): ReceiptRecord {
     user_wallet: normalizeWallet(String(row.user_wallet)),
     advertiser_wallet: normalizeWallet(String(row.advertiser_wallet)),
     campaign_id_onchain: String(row.campaign_id_onchain),
+    chain: String(row.chain ?? 'base-sepolia'),
+    chain_id: row.chain_id == null ? null : Number(row.chain_id),
+    platform: row.platform ? String(row.platform) : null,
     seconds_verified: Number(row.seconds_verified ?? 0),
     usdc_paid: safeNumber(row.usdc_paid as string | number),
     minted_at: String(row.minted_at),
@@ -1129,16 +1147,53 @@ export async function createReceipt(payload: OracleReceiptPayload) {
   }
 
   let advertiserWallet = payload.advertiserWallet ?? "";
+  let chain = payload.chain ?? "";
+  if (payload.chainId != null && !Number.isNaN(payload.chainId)) {
+    if (!chain && payload.chainId === 84532) {
+      chain = "base-sepolia";
+    }
+  }
   if (!advertiserWallet) {
     const campaignRow = await supabase
       .from("campaigns")
-      .select("advertiser_wallet")
+      .select("advertiser_wallet, chain")
       .eq("campaign_id_onchain", payload.campaignIdOnchain)
       .maybeSingle();
     advertiserWallet =
       ((campaignRow.data as Record<string, unknown> | null)
         ?.advertiser_wallet as string) ?? "";
+    if (!chain) {
+      chain =
+        ((campaignRow.data as Record<string, unknown> | null)?.chain as string) ??
+        "";
+    }
   }
+
+  const defaultChain =
+    process.env.NEXT_PUBLIC_VISTA_CHAIN || "base-sepolia";
+  chain = chain || defaultChain;
+
+  const chainIdMap: Record<string, number> = {
+    "base-sepolia": 84532,
+    base: 8453,
+  };
+  const chainId = payload.chainId ?? chainIdMap[chain] ?? null;
+
+  let platform = payload.platform ?? "";
+  const normalizedPublisherWallet = payload.publisherWallet
+    ? normalizeWallet(payload.publisherWallet)
+    : "";
+  if (!platform && normalizedPublisherWallet) {
+    const publisherRow = await supabase
+      .from("publishers")
+      .select("platform_name")
+      .eq("wallet_address", normalizedPublisherWallet)
+      .maybeSingle();
+    platform =
+      ((publisherRow.data as Record<string, unknown> | null)
+        ?.platform_name as string) ?? "";
+  }
+  const platformNormalized = platform.trim().toLowerCase();
 
   // Query stream_ticks to get breakdown of amounts
   const ticksQuery = await supabase
@@ -1176,6 +1231,9 @@ export async function createReceipt(payload: OracleReceiptPayload) {
     user_wallet: normalizeWallet(payload.userWallet),
     advertiser_wallet: normalizeWallet(advertiserWallet),
     campaign_id_onchain: payload.campaignIdOnchain,
+    chain,
+    chain_id: chainId,
+    platform: platformNormalized || null,
     seconds_verified: payload.secondsVerified,
     usdc_paid: payload.usdcPaid,
     minted_at: payload.mintedAt,
@@ -1482,6 +1540,120 @@ export async function getReceiptsByUser(
   wallet: string,
 ): Promise<ReceiptRecord[]> {
   return selectReceipts(wallet);
+}
+
+export async function getAttentionScore(
+  wallet: string,
+  filters?: { chains?: string[]; platforms?: string[] },
+): Promise<AttentionScoreResult> {
+  const normalizedWallet = normalizeWallet(wallet);
+  const supabase = createServerSupabaseClient();
+  if (!supabase) throw new Error("Supabase client is not configured");
+
+  let query = supabase
+    .from("receipts")
+    .select("*")
+    .eq("user_wallet", normalizedWallet);
+
+  if (filters?.chains?.length) {
+    query = query.in("chain", filters.chains);
+  }
+
+  if (filters?.platforms?.length) {
+    query = query.in(
+      "platform",
+      filters.platforms.map((platform) => platform.trim().toLowerCase()),
+    );
+  }
+
+  const { data: receiptRows, error: receiptError } = await query;
+  if (receiptError) throw new Error(receiptError.message);
+
+  const receipts = (receiptRows ?? []).map((row) =>
+    normalizeReceipt(row as Record<string, unknown>),
+  );
+
+  const sessionsCount = receipts.length;
+  const totalSecondsVerified = sumNumbers(
+    receipts.map((receipt) => receipt.seconds_verified),
+  );
+  const consistencyRate = sessionsCount
+    ? receipts.filter(
+        (receipt) => receipt.seconds_verified >= ATTENTION_CONSISTENCY_MIN_SECONDS,
+      ).length / sessionsCount
+    : 0;
+
+  let categoryDiversity = 0;
+  if (receipts.length) {
+    const campaignIds = Array.from(
+      new Set(receipts.map((receipt) => receipt.campaign_id_onchain)),
+    );
+    const { data: campaignRows, error: campaignError } = await supabase
+      .from("campaigns")
+      .select("campaign_id_onchain, target_preferences")
+      .in("campaign_id_onchain", campaignIds);
+    if (campaignError) throw new Error(campaignError.message);
+
+    const categorySet = new Set<string>();
+    for (const row of campaignRows ?? []) {
+      const prefs = (row.target_preferences as PreferenceOption[] | null) ?? [];
+      const primary = prefs[0];
+      if (primary) categorySet.add(primary);
+    }
+    categoryDiversity = categorySet.size;
+  }
+
+  const totalSecondsScore = clamp01(
+    totalSecondsVerified / ATTENTION_SECONDS_TARGET,
+  );
+  const categoryDiversityScore = clamp01(
+    categoryDiversity / ATTENTION_CATEGORY_TARGET,
+  );
+  const antiBotScore = 1;
+
+  const score = clamp01(
+    totalSecondsScore * ATTENTION_SCORE_WEIGHTS.totalSeconds +
+      consistencyRate * ATTENTION_SCORE_WEIGHTS.consistency +
+      categoryDiversityScore * ATTENTION_SCORE_WEIGHTS.categoryDiversity +
+      antiBotScore * ATTENTION_SCORE_WEIGHTS.antiBot,
+  );
+  const updatedAt = nowIso();
+
+  const breakdown: AttentionScoreBreakdown = {
+    totalSecondsVerified,
+    sessionsCount,
+    categoryDiversity,
+    consistencyRate,
+    antiBotScore,
+    totalSecondsScore,
+    categoryDiversityScore,
+    score: Number(score.toFixed(4)),
+    updatedAt,
+  };
+
+  const { error: profileError } = await supabase
+    .from("attention_profiles")
+    .upsert(
+      {
+        wallet_address: normalizedWallet,
+        score: breakdown.score,
+        total_seconds_verified: totalSecondsVerified,
+        sessions_count: sessionsCount,
+        category_diversity: categoryDiversity,
+        consistency_rate: consistencyRate,
+        anti_bot_score: antiBotScore,
+        updated_at: updatedAt,
+      },
+      { onConflict: "wallet_address" },
+    );
+  if (profileError) throw new Error(profileError.message);
+
+  return {
+    wallet: normalizedWallet,
+    score: breakdown.score,
+    updatedAt,
+    breakdown,
+  };
 }
 
 export async function getReceiptsByCampaign(

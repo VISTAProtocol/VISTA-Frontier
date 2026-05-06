@@ -94,9 +94,31 @@ export interface ReceiptRecord {
   user_wallet: string
   advertiser_wallet: string
   campaign_id_onchain: string
+  chain: string
+  chain_id: number | null
+  platform: string | null
   seconds_verified: number
   usdc_paid: number
   minted_at: string
+}
+
+export interface AttentionScoreBreakdown {
+  totalSecondsVerified: number
+  sessionsCount: number
+  categoryDiversity: number
+  consistencyRate: number
+  antiBotScore: number
+  totalSecondsScore: number
+  categoryDiversityScore: number
+  score: number
+  updatedAt: string
+}
+
+export interface AttentionScoreResult {
+  wallet: string
+  score: number
+  updatedAt: string
+  breakdown?: AttentionScoreBreakdown
 }
 
 export interface RegistrationStatus<T> {
@@ -260,6 +282,9 @@ export interface OracleReceiptPayload {
   publisherWallet?: string
   advertiserWallet?: string
   campaignIdOnchain: string
+  chain?: string
+  chainId?: number
+  platform?: string
   secondsVerified: number
   usdcPaid: number
   mintedAt: string

@@ -76,6 +76,8 @@ export async function syncTick(tick: TickResult, session: SessionState): Promise
 export async function syncEnd(session: SessionState, txHash: string): Promise<void> {
   if (!DASHBOARD_API_URL) return;
   try {
+    const chain = process.env.VISTA_CHAIN || 'base-sepolia';
+    const chainId = Number(process.env.VISTA_CHAIN_ID || 84532);
     const res = await fetch(`${DASHBOARD_API_URL}/api/receipts`, {
       method: 'POST',
       headers: {
@@ -88,6 +90,8 @@ export async function syncEnd(session: SessionState, txHash: string): Promise<vo
         userWallet: session.userWallet,
         publisherWallet: session.publisherWallet,
         campaignIdOnchain: session.campaignId,
+        chain,
+        chainId: Number.isFinite(chainId) ? chainId : undefined,
         secondsVerified: session.validSeconds,
         totalPaid: Number(session.totalPaid),
         mintedAt: new Date().toISOString(),

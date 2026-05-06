@@ -75,9 +75,23 @@ create table if not exists public.receipts (
   user_wallet text not null,
   advertiser_wallet text not null,
   campaign_id_onchain text not null,
+  chain text not null default 'base-sepolia',
+  chain_id integer null,
+  platform text null,
   seconds_verified integer not null,
   usdc_paid numeric not null,
   minted_at timestamptz not null
+);
+
+create table if not exists public.attention_profiles (
+  wallet_address text primary key,
+  score numeric not null default 0,
+  total_seconds_verified integer not null default 0,
+  sessions_count integer not null default 0,
+  category_diversity integer not null default 0,
+  consistency_rate numeric not null default 0,
+  anti_bot_score numeric not null default 1,
+  updated_at timestamptz not null default now()
 );
 
 create index if not exists idx_publishers_wallet on public.publishers (wallet_address);
@@ -92,6 +106,9 @@ create index if not exists idx_stream_ticks_user_wallet on public.stream_ticks (
 create index if not exists idx_stream_ticks_publisher_wallet on public.stream_ticks (publisher_wallet);
 create index if not exists idx_receipts_user_wallet on public.receipts (user_wallet);
 create index if not exists idx_receipts_campaign_id_onchain on public.receipts (campaign_id_onchain);
+create index if not exists idx_receipts_chain on public.receipts (chain);
+create index if not exists idx_receipts_platform on public.receipts (platform);
+create index if not exists idx_attention_profiles_wallet on public.attention_profiles (wallet_address);
 
 alter table public.users enable row level security;
 alter table public.publishers enable row level security;
@@ -100,6 +117,7 @@ alter table public.campaigns enable row level security;
 alter table public.sessions enable row level security;
 alter table public.stream_ticks enable row level security;
 alter table public.receipts enable row level security;
+alter table public.attention_profiles enable row level security;
 
 drop policy if exists "users_select_all" on public.users;
 drop policy if exists "users_insert_all" on public.users;
@@ -150,7 +168,15 @@ create policy "receipts_select_all" on public.receipts for select using (true);
 create policy "receipts_insert_all" on public.receipts for insert with check (true);
 create policy "receipts_update_all" on public.receipts for update using (true) with check (true);
 
+drop policy if exists "attention_profiles_select_all" on public.attention_profiles;
+drop policy if exists "attention_profiles_insert_all" on public.attention_profiles;
+drop policy if exists "attention_profiles_update_all" on public.attention_profiles;
+create policy "attention_profiles_select_all" on public.attention_profiles for select using (true);
+create policy "attention_profiles_insert_all" on public.attention_profiles for insert with check (true);
+create policy "attention_profiles_update_all" on public.attention_profiles for update using (true) with check (true);
+
 alter publication supabase_realtime add table public.campaigns;
 alter publication supabase_realtime add table public.sessions;
 alter publication supabase_realtime add table public.stream_ticks;
 alter publication supabase_realtime add table public.receipts;
+alter publication supabase_realtime add table public.attention_profiles;

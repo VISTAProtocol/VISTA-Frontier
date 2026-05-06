@@ -5,6 +5,9 @@ import { bytes32ToString } from "./utils/bytes32";
 ponder.on("VistaReceipt:ReceiptMinted", async ({ event }) => {
   const sessionId = bytes32ToString(event.args.sessionId);
   const campaignId = bytes32ToString(event.args.campaignId);
+  const chain = process.env.VISTA_CHAIN || "base-sepolia";
+  const chainId = Number(process.env.VISTA_CHAIN_ID || 84532);
+  const platform = process.env.VISTA_PLATFORM || "";
   console.log(
     `[Ponder] ReceiptMinted caught — tokenId: ${event.args.tokenId.toString()} user: ${event.args.user}`
   );
@@ -14,6 +17,9 @@ ponder.on("VistaReceipt:ReceiptMinted", async ({ event }) => {
     sessionIdOnchain: sessionId,
     userWallet: event.args.user,
     campaignIdOnchain: campaignId,
+    chain,
+    chainId: Number.isFinite(chainId) ? chainId : undefined,
+    platform: platform || undefined,
     secondsVerified: Number(event.args.secondsVerified),
     usdcPaid: event.args.usdcPaid.toString(),
     mintedAt: new Date(Number(event.block.timestamp) * 1000).toISOString(),
