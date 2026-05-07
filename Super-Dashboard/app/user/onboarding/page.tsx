@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { useAccount } from "wagmi";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -55,7 +55,7 @@ const preferenceIcons = {
 } satisfies Record<PreferenceOption, typeof Shirt>;
 
 export default function UserOnboardingPage() {
-  const { address } = useAccount();
+  const { address } = useVistaWallet();
   const [age, setAge] = useState("27");
   const [location, setLocation] = useState("Jakarta");
   const [selectedPreferences, setSelectedPreferences] = useState<

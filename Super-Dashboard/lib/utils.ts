@@ -89,7 +89,7 @@ export function buildExplorerUrl(
 // Replaces the EVM keccak256 helper.
 export async function bytes32FromSeed(seed: string): Promise<Uint8Array> {
   const data = new TextEncoder().encode(seed);
-  const hash = await crypto.subtle.digest("SHA-256", data);
+  const hash = await crypto.subtle.digest("SHA-256", data as BufferSource);
   return new Uint8Array(hash);
 }
 

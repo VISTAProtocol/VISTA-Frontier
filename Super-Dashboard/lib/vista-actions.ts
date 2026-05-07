@@ -63,7 +63,7 @@ export async function depositCampaign(
       ratePerSecond,
       duration,
     )
-    .accounts({
+    .accountsPartial({
       advertiser,
       config,
       campaign,
@@ -74,6 +74,36 @@ export async function depositCampaign(
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
       rent: SYSVAR_RENT_PUBKEY,
+    })
+    .rpc();
+}
+
+/**
+ * Advertiser pulls remaining campaign budget back to their USDC ATA. Closes
+ * the campaign as a side effect.
+ */
+export async function refundCampaign(
+  program: Program<VistaProtocol>,
+  params: {
+    campaignId: Uint8Array;
+    advertiser: PublicKey;
+  },
+): Promise<string> {
+  const { campaignId, advertiser } = params;
+  const [campaign] = campaignPda(campaignId);
+  const [campaignVaultAuthority] = campaignVaultAuthorityPda(campaignId);
+  const [campaignVault] = campaignVaultPda(campaignId);
+  const advertiserToken = await getAssociatedTokenAddress(USDC_MINT, advertiser);
+
+  return program.methods
+    .refundCampaign()
+    .accountsPartial({
+      advertiser,
+      campaign,
+      campaignVaultAuthority,
+      campaignVault,
+      advertiserToken,
+      tokenProgram: TOKEN_PROGRAM_ID,
     })
     .rpc();
 }
@@ -96,7 +126,7 @@ export async function withdraw(
 
   return program.methods
     .withdraw()
-    .accounts({
+    .accountsPartial({
       beneficiary,
       config,
       userBalance,

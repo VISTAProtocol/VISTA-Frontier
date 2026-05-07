@@ -1,0 +1,762 @@
+{
+  "address": "6MJxBMfkocuzdbR5wJRvh31BAVPrUmk454yB9HnwvXtH",
+  "metadata": {
+    "name": "attention_aggregator",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Vista attention aggregator — multi-oracle consensus + slashing"
+  },
+  "instructions": [
+    {
+      "name": "aggregate_results",
+      "docs": [
+        "Permissionless. Closes the submission window, finds outliers (deviation",
+        "> deviation_bps from mean), and CPIs into:",
+        "- oracle_registry::slash_oracle for each outlier",
+        "- vista_protocol::drain_validator_pool to move validator pool USDC",
+        "into the registry's RewardVault",
+        "- oracle_registry::credit_reward for each honest oracle (split equally)",
+        "",
+        "remaining_accounts layout:",
+        "[oracle_node_0, oracle_node_1, ...] in the SAME ORDER as",
+        "`attention_session.submissions[0..submissions_count]`."
+      ],
+      "discriminator": [
+        86,
+        23,
+        164,
+        118,
+        152,
+        4,
+        86,
+        153
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  103,
+                  114,
+                  101,
+                  103,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "aggregator_signer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  103,
+                  114,
+                  101,
+                  103,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  105,
+                  103,
+                  110,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "attention_session",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  116,
+                  116,
+                  101,
+                  110,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "session_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle_registry_program"
+        },
+        {
+          "name": "registry"
+        },
+        {
+          "name": "vista_protocol_program"
+        },
+        {
+          "name": "validator_pool_vault",
+          "writable": true
+        },
+        {
+          "name": "validator_pool_authority"
+        },
+        {
+          "name": "reward_vault",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "session_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  103,
+                  114,
+                  101,
+                  103,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "aggregator_signer",
+          "docs": [
+            "vista_protocol and oracle_registry. Stored solely to bind the bump."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  103,
+                  114,
+                  101,
+                  103,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  105,
+                  103,
+                  110,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "vista_protocol",
+          "type": "pubkey"
+        },
+        {
+          "name": "oracle_registry",
+          "type": "pubkey"
+        },
+        {
+          "name": "min_quorum",
+          "type": "u8"
+        },
+        {
+          "name": "deviation_bps",
+          "type": "u16"
+        },
+        {
+          "name": "window_seconds",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "submit_verification",
+      "discriminator": [
+        30,
+        19,
+        8,
+        156,
+        126,
+        43,
+        28,
+        175
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  103,
+                  114,
+                  101,
+                  103,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle_node",
+          "docs": [
+            "owner == config.oracle_registry and that the data shows active=true."
+          ]
+        },
+        {
+          "name": "attention_session",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  116,
+                  116,
+                  101,
+                  110,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "session_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "session_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "score",
+          "type": "u8"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "AggregatorConfig",
+      "discriminator": [
+        22,
+        93,
+        40,
+        145,
+        98,
+        97,
+        67,
+        143
+      ]
+    },
+    {
+      "name": "AttentionSession",
+      "discriminator": [
+        91,
+        216,
+        219,
+        45,
+        192,
+        143,
+        43,
+        106
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "OutlierDetected",
+      "discriminator": [
+        172,
+        71,
+        137,
+        104,
+        104,
+        219,
+        97,
+        22
+      ]
+    },
+    {
+      "name": "SessionAggregated",
+      "discriminator": [
+        81,
+        187,
+        185,
+        49,
+        194,
+        244,
+        145,
+        195
+      ]
+    },
+    {
+      "name": "VerificationSubmitted",
+      "discriminator": [
+        168,
+        0,
+        119,
+        21,
+        185,
+        123,
+        43,
+        57
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidScore",
+      "msg": "Invalid score (must be 0-100)"
+    },
+    {
+      "code": 6001,
+      "name": "QuorumTooLow",
+      "msg": "Quorum must be at least 2"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidDeviation",
+      "msg": "Deviation must be <= 10000 bps"
+    },
+    {
+      "code": 6003,
+      "name": "InvalidWindow",
+      "msg": "Window seconds must be > 0"
+    },
+    {
+      "code": 6004,
+      "name": "SessionMismatch",
+      "msg": "Session id mismatch"
+    },
+    {
+      "code": 6005,
+      "name": "AlreadySettled",
+      "msg": "Session already settled"
+    },
+    {
+      "code": 6006,
+      "name": "WindowExpired",
+      "msg": "Submission window has expired"
+    },
+    {
+      "code": 6007,
+      "name": "AlreadySubmitted",
+      "msg": "Oracle has already submitted for this session"
+    },
+    {
+      "code": 6008,
+      "name": "MaxSubmissionsReached",
+      "msg": "Maximum submissions reached for this session"
+    },
+    {
+      "code": 6009,
+      "name": "NotReadyToAggregate",
+      "msg": "Either window must expire or quorum must be reached before aggregation"
+    },
+    {
+      "code": 6010,
+      "name": "InsufficientSubmissions",
+      "msg": "Need at least 2 submissions to aggregate"
+    },
+    {
+      "code": 6011,
+      "name": "RemainingAccountsMismatch",
+      "msg": "remaining_accounts length must equal submissions_count"
+    },
+    {
+      "code": 6012,
+      "name": "WrongRegistry",
+      "msg": "Wrong oracle_registry program owns this OracleNode"
+    },
+    {
+      "code": 6013,
+      "name": "OracleNodeMalformed",
+      "msg": "OracleNode account data is malformed"
+    },
+    {
+      "code": 6014,
+      "name": "TokenAccountMalformed",
+      "msg": "Token account data is malformed"
+    }
+  ],
+  "types": [
+    {
+      "name": "AggregatorConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "vista_protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_registry",
+            "type": "pubkey"
+          },
+          {
+            "name": "min_quorum",
+            "type": "u8"
+          },
+          {
+            "name": "deviation_bps",
+            "type": "u16"
+          },
+          {
+            "name": "window_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "signer_bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AttentionSession",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "session_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "window_start",
+            "type": "i64"
+          },
+          {
+            "name": "submissions_count",
+            "type": "u8"
+          },
+          {
+            "name": "submissions",
+            "type": {
+              "array": [
+                {
+                  "defined": {
+                    "name": "OracleSubmission"
+                  }
+                },
+                16
+              ]
+            }
+          },
+          {
+            "name": "is_settled",
+            "type": "bool"
+          },
+          {
+            "name": "consensus_score",
+            "type": "u8"
+          },
+          {
+            "name": "consensus_reached",
+            "type": "bool"
+          },
+          {
+            "name": "settled_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleSubmission",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "oracle",
+            "type": "pubkey"
+          },
+          {
+            "name": "score",
+            "type": "u8"
+          },
+          {
+            "name": "submitted_at",
+            "type": "i64"
+          },
+          {
+            "name": "is_outlier",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OutlierDetected",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "session_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "oracle",
+            "type": "pubkey"
+          },
+          {
+            "name": "score",
+            "type": "u8"
+          },
+          {
+            "name": "consensus",
+            "type": "u8"
+          },
+          {
+            "name": "slashed_amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SessionAggregated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "session_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "consensus_score",
+            "type": "u8"
+          },
+          {
+            "name": "consensus_reached",
+            "type": "bool"
+          },
+          {
+            "name": "honest_count",
+            "type": "u8"
+          },
+          {
+            "name": "slashed_count",
+            "type": "u8"
+          },
+          {
+            "name": "per_oracle_reward",
+            "type": "u64"
+          },
+          {
+            "name": "settled_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VerificationSubmitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "session_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "oracle",
+            "type": "pubkey"
+          },
+          {
+            "name": "score",
+            "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    }
+  ]
+}

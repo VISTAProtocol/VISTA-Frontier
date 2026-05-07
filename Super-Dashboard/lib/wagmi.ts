@@ -1,31 +1,9 @@
-import { http } from "viem";
-import { baseSepolia } from "viem/chains";
-import { cookieStorage, createConfig, createStorage } from "wagmi";
-import { coinbaseWallet, injected, walletConnect } from "wagmi/connectors";
+// Deprecated — protocol has migrated to Solana. This module is preserved as
+// a compile-time stub for any legacy import that still references
+// `baseSepoliaNetwork` / `wagmiConfig`. New code should use `lib/solana.ts`
+// and `@solana/wallet-adapter-react`.
+// TODO: delete once every consumer has been migrated.
 
-import { APP_NAME, BASE_MAINNET } from "@/lib/constants";
-
-const PROJECT_ID =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ||
-  "vista-demo-walletconnect";
-
-const RPC_URL = process.env.NEXT_PUBLIC_BASE_RPC || BASE_MAINNET.rpcUrl;
-
-export const baseNetwork = baseSepolia;
+export const baseNetwork = { id: 0, name: "deprecated" } as const;
 export const baseSepoliaNetwork = baseNetwork;
-
-export const wagmiConfig = createConfig({
-  chains: [baseNetwork],
-  connectors: [
-    injected(),
-    walletConnect({ projectId: PROJECT_ID }),
-    coinbaseWallet({ appName: APP_NAME }),
-  ],
-  transports: {
-    [baseNetwork.id]: http(RPC_URL),
-  },
-  storage: createStorage({
-    storage: cookieStorage,
-  }),
-  ssr: true,
-});
+export const wagmiConfig = null;

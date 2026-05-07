@@ -23,6 +23,8 @@ export function getVistaProgram(
 // Solana port of bytes32FromSeed (was keccak256 on EVM).
 export async function bytes32FromSeed(seed: string): Promise<Uint8Array> {
   const data = new TextEncoder().encode(seed);
-  const hash = await crypto.subtle.digest("SHA-256", data);
+  // Cast to ArrayBuffer-backed view; modern TS DOM types narrow Uint8Array's
+  // generic in a way SubtleCrypto's BufferSource doesn't accept directly.
+  const hash = await crypto.subtle.digest("SHA-256", data as BufferSource);
   return new Uint8Array(hash);
 }

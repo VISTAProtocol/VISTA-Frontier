@@ -6,8 +6,6 @@ import { useParams, useRouter } from "next/navigation";
 import { Coins, Eye, Timer, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { useChainId, useSwitchChain, useWriteContract } from "wagmi";
-import { waitForTransactionReceipt } from "wagmi/actions";
 import { LoadingScreen } from "@/components/loading-screen";
 import { MetricChartCard } from "@/components/metric-chart-card";
 import { PageHeader } from "@/components/page-header";
@@ -24,20 +22,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchJson } from "@/lib/http";
-import {
-  contractAddresses,
-  hasContractConfig,
-  vistaEscrowAbi,
-} from "@/lib/contracts";
+import { useVistaProgram } from "@/lib/use-vista-program";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
+import { refundCampaign } from "@/lib/vista-actions";
+import { explorerUrl } from "@/lib/solana";
 import type { CampaignDetailData } from "@/lib/types";
 import {
   formatDateTime,
-  buildExplorerUrl,
   formatUsdc,
   truncateAddress,
   truncateHash,
 } from "@/lib/utils";
-import { baseSepoliaNetwork, wagmiConfig } from "@/lib/wagmi";
+import { PublicKey } from "@solana/web3.js";
 
 function AudienceBreakdown({
   title,
@@ -81,9 +77,8 @@ function AudienceBreakdown({
 export default function CampaignDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const chainId = useChainId();
-  const { switchChainAsync } = useSwitchChain();
-  const { writeContractAsync } = useWriteContract();
+  const program = useVistaProgram();
+  const { address } = useVistaWallet();
   const [data, setData] = useState<CampaignDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [isRefunding, setIsRefunding] = useState(false);
@@ -112,37 +107,35 @@ export default function CampaignDetailPage() {
 
   async function handleRefund() {
     if (!data) return;
+    if (!program || !address) {
+      toast.error("Connect a Solana wallet first.");
+      return;
+    }
 
     try {
       setIsRefunding(true);
 
-      let txHash: `0x${string}` | null = null;
-
-      if (hasContractConfig && contractAddresses.vistaEscrow) {
-        if (chainId !== baseSepoliaNetwork.id) {
-          await switchChainAsync({ chainId: baseSepoliaNetwork.id });
-        }
-
-        txHash = await writeContractAsync({
-          abi: vistaEscrowAbi,
-          address: contractAddresses.vistaEscrow,
-          functionName: "refundRemaining",
-          args: [data.campaign.campaign_id_onchain as `0x${string}`],
-          chainId: baseSepoliaNetwork.id,
-        });
-
-        await waitForTransactionReceipt(wagmiConfig, { hash: txHash });
-      } else {
-        toast.warning(
-          "Contract config missing, refund is running in demo mode only.",
-        );
+      // campaign_id_onchain is stored as 0x-prefixed 64-char hex (legacy
+      // EVM convention) but the on-chain Anchor PDA seed is the raw 32 bytes.
+      // Strip the prefix and decode.
+      const hex = data.campaign.campaign_id_onchain.replace(/^0x/, "");
+      if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+        throw new Error("Invalid campaign id format on record.");
       }
+      const campaignIdBytes = Uint8Array.from(
+        Buffer.from(hex, "hex"),
+      );
+
+      const sig = await refundCampaign(program, {
+        campaignId: campaignIdBytes,
+        advertiser: new PublicKey(address),
+      });
 
       await fetchJson(`/api/campaigns/${data.campaign.id}`, {
         method: "PATCH",
         body: JSON.stringify({ active: false }),
       });
-      toast.success("Campaign ended and marked for refund.");
+      toast.success("Campaign ended and remaining USDC refunded.");
       router.refresh();
       setData((current) =>
         current
@@ -153,13 +146,7 @@ export default function CampaignDetailPage() {
           : current,
       );
 
-      if (txHash) {
-        window.open(
-          buildExplorerUrl("tx", txHash),
-          "_blank",
-          "noopener,noreferrer",
-        );
-      }
+      window.open(explorerUrl("tx", sig), "_blank", "noopener,noreferrer");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Unable to process refund.",

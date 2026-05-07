@@ -1,42 +1,25 @@
-import { isAddress, parseAbi, type Address } from "viem"
+/**
+ * EVM contract metadata — deprecated. The protocol has migrated to Solana
+ * (see lib/solana.ts and lib/vista-actions.ts). This file exists only to
+ * keep legacy imports compiling during the EVM→SVM transition. All ABIs
+ * resolve to empty arrays and all addresses to null, so any page that
+ * still calls into them via `useReadContract` / `useWriteContract` will
+ * read empty data — pages should use Anchor reads or `/api/*` routes.
+ *
+ * TODO: delete this file once every page has been migrated to
+ *       useVistaProgram / vista-actions.
+ */
 
-export const erc20Abi = parseAbi([
-  "function approve(address spender, uint256 value) external returns (bool)",
-  "function allowance(address owner, address spender) external view returns (uint256)",
-  "function balanceOf(address account) external view returns (uint256)",
-])
-
-export const vistaEscrowAbi = parseAbi([
-  "function deposit(bytes32 campaignId, uint256 amount, uint256 ratePerSecond, uint256 duration) external",
-  "function refundRemaining(bytes32 campaignId) external",
-])
-
-export const vistaStreamAbi = parseAbi([
-  "function sessions(bytes32) external view returns (bytes32 sessionId, bytes32 campaignId, address userWallet, address publisherWallet, uint256 secondsVerified, uint256 totalPaid, bool active, uint256 startedAt)",
-])
-
-export const vistaVaultAbi = parseAbi([
-  "function withdraw() external",
-  "function getBalance(address wallet) external view returns (uint256)",
-  "function getEarningRecords(address wallet) external view returns ((bytes32 sessionId, address publisherWallet, bytes32 campaignId, uint256 amount, uint8 role, uint256 timestamp)[])",
-  "function quoteBridgeClaim(uint256 receiptTokenId, uint32 dstEid, bytes32 receiver, bytes options) external view returns (uint256 nativeFee, uint256 lzTokenFee)",
-  "function requestBridgeClaim(uint256 receiptTokenId, uint32 dstEid, bytes32 receiver, bytes options) external payable",
-])
-
-const rawContracts = {
-  vistaStream: process.env.NEXT_PUBLIC_VISTA_STREAM_ADDRESS,
-  vistaEscrow: process.env.NEXT_PUBLIC_VISTA_ESCROW_ADDRESS,
-  vistaVault: process.env.NEXT_PUBLIC_VISTA_VAULT_ADDRESS,
-  mockUsdc: process.env.NEXT_PUBLIC_MOCK_USDC_ADDRESS,
-}
+export const erc20Abi = [] as const;
+export const vistaEscrowAbi = [] as const;
+export const vistaStreamAbi = [] as const;
+export const vistaVaultAbi = [] as const;
 
 export const contractAddresses = {
-  vistaStream: isAddress(rawContracts.vistaStream ?? "") ? (rawContracts.vistaStream as Address) : null,
-  vistaEscrow: isAddress(rawContracts.vistaEscrow ?? "") ? (rawContracts.vistaEscrow as Address) : null,
-  vistaVault: isAddress(rawContracts.vistaVault ?? "") ? (rawContracts.vistaVault as Address) : null,
-  mockUsdc: isAddress(rawContracts.mockUsdc ?? "") ? (rawContracts.mockUsdc as Address) : null,
-}
+  vistaStream: null,
+  vistaEscrow: null,
+  vistaVault: null,
+  mockUsdc: null,
+} as const;
 
-export const hasContractConfig = Boolean(
-  contractAddresses.vistaEscrow && contractAddresses.mockUsdc
-)
+export const hasContractConfig = false;

@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useEffect, useState } from "react"
-import { useAccount } from "wagmi"
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 import { EmptyState } from "@/components/empty-state"
 import { LoadingScreen } from "@/components/loading-screen"
@@ -22,7 +22,7 @@ import type { CampaignListItem } from "@/lib/types"
 import { cn, formatDateTime, formatUsdc } from "@/lib/utils"
 
 export default function AdvertiserCampaignsPage() {
-  const { address } = useAccount()
+  const { address } = useVistaWallet()
   const [campaigns, setCampaigns] = useState<CampaignListItem[]>([])
   const [loading, setLoading] = useState(true)
 

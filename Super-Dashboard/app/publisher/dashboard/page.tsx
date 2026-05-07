@@ -26,12 +26,12 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  useAccount,
   useReadContract,
   useReadContracts,
   useWaitForTransactionReceipt,
   useWriteContract,
-} from "wagmi";
+} from "@/lib/evm-shims";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 import { LoadingScreen } from "@/components/loading-screen";
 import { MetricChartCard } from "@/components/metric-chart-card";
@@ -599,7 +599,7 @@ function AnalyticsTab({
 // ─── Main Page ──────────────────────────────────────────────────────────────
 
 export default function PublisherDashboardPage() {
-  const { address } = useAccount();
+  const { address } = useVistaWallet();
   const [activeTab, setActiveTab] = useState<"dashboard" | "analytics">(
     "dashboard",
   );

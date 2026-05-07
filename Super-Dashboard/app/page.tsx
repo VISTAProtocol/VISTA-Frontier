@@ -1,13 +1,11 @@
 "use client";
 
-import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { ArrowRight, ExternalLink } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { toast } from "sonner";
-import { useAccount } from "wagmi";
 
 import { BrandMark } from "@/components/brand-mark";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -26,6 +24,7 @@ import {
 import { APP_TAGLINE, roleMeta } from "@/lib/constants";
 import { fetchJson } from "@/lib/http";
 import type { RoleName } from "@/lib/types";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 import { cn } from "@/lib/utils";
 
 const tickerItems = [
@@ -126,8 +125,7 @@ const roleCards: Record<
 
 export default function HomePage() {
   const router = useRouter();
-  const { openConnectModal } = useConnectModal();
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, openConnectModal } = useVistaWallet();
   const [activeRole, setActiveRole] = useState<RoleName>("advertiser");
   const [imageLoaded, setImageLoaded] = useState(false);
   const [pendingRole, setPendingRole] = useState<RoleName | null>(null);

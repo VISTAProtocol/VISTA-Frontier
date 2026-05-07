@@ -92,29 +92,36 @@ async function accountExists(
   return info !== null;
 }
 
+interface FundeeBudget {
+  kp: Keypair;
+  label: string;
+  /** Top-up triggers if current balance falls below this (lamports). */
+  threshold: number;
+  /** Target balance after top-up (lamports). */
+  target: number;
+}
+
 async function topUpSolIfBelow(
   connection: Connection,
   admin: Keypair,
-  fundees: { kp: Keypair; label: string }[],
-  thresholdLamports: number,
-  fundAmountLamports: number,
+  fundees: FundeeBudget[],
 ): Promise<void> {
   const ixs: Array<{
     ix: anchor.web3.TransactionInstruction;
     label: string;
     topUp: number;
   }> = [];
-  for (const { kp, label } of fundees) {
+  for (const { kp, label, threshold, target } of fundees) {
     const bal = await connection.getBalance(kp.publicKey, "confirmed");
-    if (bal < thresholdLamports) {
+    if (bal < threshold) {
       ixs.push({
         ix: SystemProgram.transfer({
           fromPubkey: admin.publicKey,
           toPubkey: kp.publicKey,
-          lamports: fundAmountLamports - bal,
+          lamports: target - bal,
         }),
         label,
-        topUp: (fundAmountLamports - bal) / LAMPORTS_PER_SOL,
+        topUp: (target - bal) / LAMPORTS_PER_SOL,
       });
     }
   }
@@ -208,20 +215,17 @@ async function main() {
 
   // ── 2. Top up SOL where needed (only signing keypairs) ──────────────
   console.log("\n── 2. Topping up SOL");
-  const SOL_THRESHOLD = 0.04 * LAMPORTS_PER_SOL;
-  const SOL_TARGET = 0.08 * LAMPORTS_PER_SOL;
-  await topUpSolIfBelow(
-    connection,
-    admin,
-    [
-      { kp: advertiser.kp, label: "advertiser" },
-      { kp: oracle1.kp, label: "oracle_1" },
-      { kp: oracle2.kp, label: "oracle_2" },
-      { kp: oracle3.kp, label: "oracle_3" },
-    ],
-    SOL_THRESHOLD,
-    SOL_TARGET,
-  );
+  // Per-role budgets sized to actual on-chain rent + tx fees with ~2-3×
+  // margin. oracle_1 doubles as the tick caller / first submitter, paying
+  // rent for session + validator_pool_vault + balances + AttentionSession,
+  // so it gets the largest budget.
+  const SOL = (sol: number) => Math.round(sol * LAMPORTS_PER_SOL);
+  await topUpSolIfBelow(connection, admin, [
+    { kp: advertiser.kp,  label: "advertiser", threshold: SOL(0.005), target: SOL(0.015) },
+    { kp: oracle1.kp,     label: "oracle_1",   threshold: SOL(0.012), target: SOL(0.040) },
+    { kp: oracle2.kp,     label: "oracle_2",   threshold: SOL(0.005), target: SOL(0.012) },
+    { kp: oracle3.kp,     label: "oracle_3",   threshold: SOL(0.005), target: SOL(0.012) },
+  ]);
 
   // ── 3. Load or create mock USDC mint ────────────────────────────────
   console.log("\n── 3. Mock USDC mint");
