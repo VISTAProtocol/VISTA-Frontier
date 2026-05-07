@@ -11,28 +11,18 @@ import {VistaGateway} from "../src/VistaGateway.sol";
 contract Deploy is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        address lzEndpoint = vm.envAddress("LZ_ENDPOINT");
         address tokenMessenger = vm.envAddress("CCTP_TOKEN_MESSENGER");
         address usdc = vm.envAddress("USDC");
-        uint32 solanaEid = uint32(vm.envUint("LZ_SOLANA_EID"));
 
         address deployer = vm.addr(deployerKey);
         console.log("Deploying VistaGateway");
         console.log("  chain id        :", block.chainid);
         console.log("  deployer        :", deployer);
-        console.log("  lz endpoint     :", lzEndpoint);
         console.log("  cctp messenger  :", tokenMessenger);
         console.log("  usdc            :", usdc);
-        console.log("  solana eid      :", solanaEid);
 
         vm.startBroadcast(deployerKey);
-        VistaGateway gateway = new VistaGateway(
-            lzEndpoint,
-            deployer,
-            tokenMessenger,
-            usdc,
-            solanaEid
-        );
+        VistaGateway gateway = new VistaGateway(deployer, tokenMessenger, usdc);
         vm.stopBroadcast();
 
         console.log("VistaGateway deployed at:", address(gateway));

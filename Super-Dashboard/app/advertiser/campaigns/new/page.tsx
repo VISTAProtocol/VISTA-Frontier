@@ -43,10 +43,7 @@ import {
   wagmiConfig,
   type SupportedEvmChainKey,
 } from "@/lib/evm/config";
-import {
-  DEFAULT_LZ_OPTIONS,
-  VISTA_GATEWAY_ABI,
-} from "@/lib/evm/vista-gateway";
+import { VISTA_GATEWAY_ABI } from "@/lib/evm/vista-gateway";
 import { USDC_ABI, usdcUnits } from "@/lib/evm/usdc";
 import { solanaPubkeyToBytes32 } from "@/lib/evm/solana-bytes";
 
@@ -533,11 +530,9 @@ export default function NewCampaignPage() {
       chainId: chainIdLiteral,
     });
 
-    // 5. Submit the deposit. NOTE: we don't call quoteLzFee here and just
-    //    pass a generous flat fee for the hackathon — if you want a real
-    //    quote, call gateway.quoteLzFee first and use its nativeFee value.
-    //    Passing too little reverts; too much is refunded by the endpoint.
-    const FLAT_LZ_FEE_WEI = BigInt("1000000000000000"); // 0.001 ETH
+    // 5. Submit the deposit. Trusted-relayer model: gateway does CCTP
+    //    burn and emits CampaignBridged; oracle-node relays metadata to
+    //    Solana. No LayerZero fee, no native value needed beyond gas.
     toast.info(`Submitting deposit on ${meta.label}…`);
     const depositTx = await writeContractAsync({
       abi: VISTA_GATEWAY_ABI,
@@ -549,10 +544,8 @@ export default function NewCampaignPage() {
         BigInt(Math.round(VISTA_RATE * 1_000_000)),
         BigInt(duration),
         solanaCampaignVault,
-        DEFAULT_LZ_OPTIONS,
       ],
       chainId: chainIdLiteral,
-      value: FLAT_LZ_FEE_WEI,
     });
 
     const receipt = await waitForTransactionReceipt(wagmiConfig, {

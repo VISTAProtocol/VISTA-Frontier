@@ -1,0 +1,9 @@
+{
+  "chain": "arbitrum-sepolia",
+  "chainId": 421614,
+  "vistaGateway": "0xbca83ebb2e282d6f570ca2fe3f5890a72cce1945",
+  "deployer": "0xf9B3ad378176e2dd95b23466450FFDCAe042de49",
+  "cctpTokenMessenger": "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5",
+  "usdc": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+  "notes": "Trusted-relayer model — no LayerZero on EVM side. Oracle-node tails CampaignBridged event."
+}
