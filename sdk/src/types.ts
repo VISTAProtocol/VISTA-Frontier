@@ -1,8 +1,16 @@
+/**
+ * Wallet addresses are base58-encoded Solana pubkeys (e.g. `4Jp9E68g…`),
+ * not 0x-prefixed EVM addresses. Campaign / session ids are hex strings of
+ * the underlying 32-byte values.
+ */
 export interface VistaConfig {
   apiKey: string;
+  /** Solana base58 pubkey of the connected user wallet */
   userWallet: string;
   oracleUrl: string;
+  /** 32-byte hex (with or without 0x prefix) — the campaign PDA seed */
   campaignId: string;
+  /** Solana base58 pubkey of the publisher payout wallet */
   publisherWallet: string;
   requireFullscreen?: boolean;
 }
@@ -36,6 +44,7 @@ export interface HeartbeatResponse {
 }
 
 export interface EarnCallbackData {
+  /** Total session amount in USDC (decimal, not raw u64) */
   sessionAmount: number;
   tickAmount: number;
   validSeconds: number;
@@ -52,6 +61,7 @@ export interface VistaStatus {
 }
 
 export interface OnboardingParams {
+  /** Solana base58 pubkey of the user wallet */
   wallet: string;
   dashboardUrl?: string;
 }

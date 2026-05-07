@@ -3,7 +3,7 @@ use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 
 // Placeholder program ID for PoC. Replace during deployment.
 // This program expects LayerZero V2 executor to act as mint authority.
-declare_id!("VistaBridge11111111111111111111111111111111");
+declare_id!("9R7UWcCQVXW4dKKLYLLRfGQf5prePQBMyTEwd2TMC8sE");
 
 #[program]
 pub mod vista_bridge {

@@ -1,11 +1,11 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::pubkey;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("VistaProto111111111111111111111111111111111");
+declare_id!("4Jp9E68gcEMUXTwtm7suQ5wKq6U9jDRK4KPuRs6fReCM");
 
-// Circle's official test USDC mint on Solana devnet. The program is locked to
-// this mint at `initialize`; rebuild with a different constant for mainnet.
+// Canonical Vista settlement mint. Admin should pass this exact mint to
+// `initialize` on devnet. After init, `config.usdc_mint` is immutable and all
+// subsequent instructions enforce it. For mainnet, swap this constant.
 // Faucet: https://faucet.circle.com (select Solana devnet, USDC).
 #[constant]
 pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
@@ -367,7 +367,6 @@ pub struct Initialize<'info> {
     )]
     pub config: Account<'info, Config>,
 
-    #[account(address = USDC_MINT @ VistaError::WrongMint)]
     pub usdc_mint: Account<'info, Mint>,
 
     /// CHECK: PDA used as authority of the global user_vault token account.
@@ -523,21 +522,21 @@ pub struct TickStream<'info> {
     pub oracle: Signer<'info>,
 
     #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
 
     #[account(
         mut,
         seeds = [b"session", session.session_id.as_ref()],
         bump = session.bump,
     )]
-    pub session: Account<'info, Session>,
+    pub session: Box<Account<'info, Session>>,
 
     #[account(
         mut,
         seeds = [b"campaign", campaign.campaign_id.as_ref()],
         bump = campaign.bump,
     )]
-    pub campaign: Account<'info, Campaign>,
+    pub campaign: Box<Account<'info, Campaign>>,
 
     /// CHECK: PDA owning campaign vault.
     #[account(
@@ -551,7 +550,7 @@ pub struct TickStream<'info> {
         seeds = [b"campaign_vault", campaign.campaign_id.as_ref()],
         bump,
     )]
-    pub campaign_vault: Account<'info, TokenAccount>,
+    pub campaign_vault: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
@@ -559,7 +558,7 @@ pub struct TickStream<'info> {
         bump,
         token::authority = vault_authority,
     )]
-    pub user_vault: Account<'info, TokenAccount>,
+    pub user_vault: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: PDA authority of user_vault.
     #[account(seeds = [b"vault_authority"], bump = config.vault_authority_bump)]
@@ -570,7 +569,7 @@ pub struct TickStream<'info> {
         token::mint = config.usdc_mint,
         constraint = vista_wallet_token.owner == config.vista_wallet @ VistaError::WrongVistaWallet,
     )]
-    pub vista_wallet_token: Account<'info, TokenAccount>,
+    pub vista_wallet_token: Box<Account<'info, TokenAccount>>,
 
     #[account(
         init_if_needed,
@@ -579,7 +578,7 @@ pub struct TickStream<'info> {
         seeds = [b"balance", session.user_wallet.as_ref()],
         bump,
     )]
-    pub user_balance: Account<'info, UserBalance>,
+    pub user_balance: Box<Account<'info, UserBalance>>,
 
     #[account(
         init_if_needed,
@@ -588,7 +587,7 @@ pub struct TickStream<'info> {
         seeds = [b"balance", session.publisher_wallet.as_ref()],
         bump,
     )]
-    pub publisher_balance: Account<'info, UserBalance>,
+    pub publisher_balance: Box<Account<'info, UserBalance>>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -627,7 +626,7 @@ pub struct EndStream<'info> {
         init,
         payer = oracle,
         space = 8 + Receipt::SIZE,
-        seeds = [b"receipt", &receipt_counter.next_id.to_le_bytes()],
+        seeds = [b"receipt".as_ref(), receipt_counter.next_id.to_le_bytes().as_ref()],
         bump,
     )]
     pub receipt: Account<'info, Receipt>,
@@ -872,8 +871,6 @@ pub enum VistaError {
     NothingToWithdraw,
     #[msg("Vista wallet token account owner mismatch")]
     WrongVistaWallet,
-    #[msg("USDC mint must equal Circle devnet USDC mint")]
-    WrongMint,
     #[msg("Arithmetic overflow")]
     Overflow,
 }
