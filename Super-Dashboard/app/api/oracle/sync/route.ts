@@ -66,6 +66,42 @@ const eventSchema = z.discriminatedUnion("event", [
       settled_at: z.string(),
     }),
   }),
+  z.object({
+    event: z.literal("cross_chain_evm_confirmed"),
+    payload: z.object({
+      campaign_id_onchain: z.string(),
+      source_chain: z.enum(["base-sepolia", "arbitrum-sepolia"]),
+      source_chain_tx_hash: z.string(),
+      cctp_nonce: z.string(),
+      advertiser_evm_address: z.string(),
+      total_budget_raw: z.string(),
+      observed_at: z.string(),
+    }),
+  }),
+  z.object({
+    event: z.literal("cross_chain_attested"),
+    payload: z.object({
+      campaign_id_onchain: z.string(),
+      cctp_nonce: z.string(),
+      observed_at: z.string(),
+    }),
+  }),
+  z.object({
+    event: z.literal("cross_chain_active"),
+    payload: z.object({
+      campaign_id_onchain: z.string(),
+      confirm_tx: z.string().optional(),
+      activated_at: z.string(),
+    }),
+  }),
+  z.object({
+    event: z.literal("cross_chain_failed"),
+    payload: z.object({
+      campaign_id_onchain: z.string(),
+      stage: z.string(),
+      error: z.string(),
+    }),
+  }),
 ]);
 
 export async function POST(request: Request) {

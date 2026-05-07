@@ -3,10 +3,15 @@ import { createHash } from "node:crypto";
 import express from "express";
 import { z } from "zod";
 
+import { SystemProgram } from "@solana/web3.js";
+
 import { AntiReplay } from "./antiReplay.js";
+import { BridgeChainClient } from "./bridgeChain.js";
+import { CctpWatcher } from "./cctpWatcher.js";
 import { ChainClient } from "./chain.js";
 import { loadConfig } from "./config.js";
 import { EventListener } from "./eventListener.js";
+import { startEvmWatchers } from "./evmWatcher.js";
 import { SessionBuffer } from "./sessionBuffer.js";
 import { SyncClient } from "./syncClient.js";
 import { scoreSignals } from "./verifier.js";
@@ -47,6 +52,72 @@ async function main() {
 
   const eventListener = new EventListener(cfg, chain.connection, sync);
   eventListener.start();
+
+  // ─── Cross-chain advertiser deposit pipeline ────────────────────────────
+  const bridge = new BridgeChainClient(cfg);
+  const cctp = new CctpWatcher(cfg, sync);
+  cctp.setOnAttested(async (job) => {
+    // CCTP attestation is ready. The Solana side requires:
+    //   1. MessageTransmitter.receive_message — Circle's CCTP receiver
+    //      program mints USDC into the per-campaign vault PDA. This is
+    //      submitted by ANY caller (Circle's program is permissionless),
+    //      and requires the raw `message` + `attestation` bytes returned by
+    //      Iris. For the hackathon this submission is left to the operator
+    //      (e.g. via Circle's CCTP UI / `solana-cli`); see README.
+    //   2. vista_bridge.confirm_usdc_received — once USDC has landed in
+    //      the vault, this flips `is_active=true`. Permissionless; we call
+    //      it as the oracle so the dashboard moves to `bridge_status=active`.
+    try {
+      const sig = await bridge.submitConfirmUsdcReceived(
+        Buffer.from(job.campaignId.slice(2), "hex"),
+      );
+      console.log(
+        `[bridge] confirm_usdc_received campaign=${job.campaignId} tx=${sig}`,
+      );
+      await sync.post({
+        event: "cross_chain_active",
+        payload: {
+          campaign_id_onchain: job.campaignId,
+          confirm_tx: sig,
+          activated_at: new Date().toISOString(),
+        },
+      });
+    } catch (err) {
+      console.warn(
+        `[bridge] confirm_usdc_received failed for ${job.campaignId} — vault probably hasn't received CCTP mint yet. Operator needs to run MessageTransmitter.receive_message.`,
+        err,
+      );
+      await sync.post({
+        event: "cross_chain_failed",
+        payload: {
+          campaign_id_onchain: job.campaignId,
+          stage: "confirm_usdc_received",
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
+  });
+  cctp.start();
+
+  startEvmWatchers(cfg, sync, cctp, async (chain, c) => {
+    // LayerZero stub: we receive the EVM event and submit
+    // receive_campaign_metadata as the oracle (= lz_executor_authority).
+    const sig = await bridge.submitReceiveCampaignMetadata({
+      campaignId: Buffer.from(c.campaignId.slice(2), "hex"),
+      advertiserEvm: Buffer.from(c.advertiser.slice(2), "hex"),
+      sourceChainEid: chain.lzEid,
+      totalBudget: c.totalBudget,
+      ratePerSecond: c.ratePerSecond,
+      duration: c.duration,
+      cctpNonce: c.cctpNonce,
+      // No EVM↔Solana wallet linking yet — attribute to system program.
+      // The EVM address is recorded separately on `advertiser_evm`.
+      advertiserSolana: SystemProgram.programId,
+    });
+    console.log(
+      `[bridge] receive_campaign_metadata campaign=${c.campaignId} tx=${sig}`,
+    );
+  });
 
   let active = false;
 

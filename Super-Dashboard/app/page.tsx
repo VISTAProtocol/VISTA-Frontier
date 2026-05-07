@@ -29,7 +29,6 @@ import { cn } from "@/lib/utils";
 
 const tickerItems = [
   "ATTENTION MONETIZATION PROTOCOL",
-  "VERIFIED ON BASE MAINNET",
   "USDC STREAMS EVERY 10 SECONDS",
   "OPEN SOURCE · PERMISSIONLESS",
   "ORACLE-VERIFIED ATTENTION",
@@ -475,18 +474,20 @@ export default function HomePage() {
           </p>
 
           <div className="mt-6 flex flex-wrap gap-2">
-            {(["advertiser", "publisher", "user", "oracle"] as RoleName[]).map((role) => (
-              <Button
-                key={role}
-                variant={activeRole === role ? "default" : "outline"}
-                onClick={() => {
-                  setActiveRole(role);
-                  setImageLoaded(false);
-                }}
-              >
-                {roleCards[role].tab}
-              </Button>
-            ))}
+            {(["advertiser", "publisher", "user", "oracle"] as RoleName[]).map(
+              (role) => (
+                <Button
+                  key={role}
+                  variant={activeRole === role ? "default" : "outline"}
+                  onClick={() => {
+                    setActiveRole(role);
+                    setImageLoaded(false);
+                  }}
+                >
+                  {roleCards[role].tab}
+                </Button>
+              ),
+            )}
           </div>
 
           <Card className="p-2 mt-6 overflow-hidden rounded-[24px] border-border/70 bg-[linear-gradient(180deg,transparent,rgba(255,255,255,0.55))] dark:bg-[linear-gradient(180deg,transparent,rgba(18,24,30,0.72))]">

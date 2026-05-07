@@ -16,6 +16,7 @@
     "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.95.4",
     "express": "^4.21.0",
+    "viem": "^2.48.8",
     "zod": "^3.23.8"
   },
   "devDependencies": {

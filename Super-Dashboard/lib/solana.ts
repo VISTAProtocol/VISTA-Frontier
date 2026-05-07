@@ -160,6 +160,60 @@ export function rewardVaultPda(): [PublicKey, number] {
   );
 }
 
+// ── vista_bridge PDAs (cross-chain campaign deposits) ─────────────────────
+
+export function bridgeConfigPda(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("bridge_config")],
+    VISTA_BRIDGE_PROGRAM_ID,
+  );
+}
+
+export function crossChainCampaignPda(
+  campaignId: Uint8Array,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("xchain_campaign"), Buffer.from(campaignId)],
+    VISTA_BRIDGE_PROGRAM_ID,
+  );
+}
+
+export function crossChainVaultAuthorityPda(
+  campaignId: Uint8Array,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("xchain_vault_authority"), Buffer.from(campaignId)],
+    VISTA_BRIDGE_PROGRAM_ID,
+  );
+}
+
+export function crossChainVaultPda(
+  campaignId: Uint8Array,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("xchain_vault"), Buffer.from(campaignId)],
+    VISTA_BRIDGE_PROGRAM_ID,
+  );
+}
+
+export function crossChainSessionPda(
+  sessionId: Uint8Array,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("xchain_session"), Buffer.from(sessionId)],
+    VISTA_BRIDGE_PROGRAM_ID,
+  );
+}
+
+export function bridgeUserBalancePda(
+  wallet: PublicKey,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("bridge_balance"), wallet.toBuffer()],
+    VISTA_BRIDGE_PROGRAM_ID,
+  );
+}
+
 // ── attention_aggregator PDAs ──────────────────────────────────────────────
 
 export function aggregatorConfigPda(): [PublicKey, number] {

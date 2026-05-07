@@ -7,7 +7,11 @@ export type OracleSyncEvent =
   | { event: "reward_credited"; payload: Record<string, unknown> }
   | { event: "rewards_claimed"; payload: Record<string, unknown> }
   | { event: "submission"; payload: Record<string, unknown> }
-  | { event: "session_aggregated"; payload: Record<string, unknown> };
+  | { event: "session_aggregated"; payload: Record<string, unknown> }
+  | { event: "cross_chain_evm_confirmed"; payload: Record<string, unknown> }
+  | { event: "cross_chain_attested"; payload: Record<string, unknown> }
+  | { event: "cross_chain_active"; payload: Record<string, unknown> }
+  | { event: "cross_chain_failed"; payload: Record<string, unknown> };
 
 export class SyncClient {
   constructor(private readonly cfg: OracleConfig) {}

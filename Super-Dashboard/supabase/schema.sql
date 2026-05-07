@@ -237,3 +237,42 @@ alter publication supabase_realtime add table public.receipts;
 alter publication supabase_realtime add table public.attention_profiles;
 alter publication supabase_realtime add table public.oracle_nodes;
 alter publication supabase_realtime add table public.oracle_submissions;
+
+-- ─────────────────── Cross-chain advertiser deposits ───────────────────
+-- USDC bridges from Base Sepolia / Arbitrum Sepolia → Solana via Circle CCTP
+-- (USDC burn/mint) plus LayerZero V2 (campaign metadata). Solana stays the
+-- only settlement layer; these columns track the bridge lifecycle.
+
+alter table public.campaigns
+  add column if not exists source_chain text,
+  add column if not exists advertiser_evm_address text,
+  add column if not exists bridge_status text default 'native',
+  add column if not exists cctp_nonce bigint,
+  add column if not exists source_chain_tx_hash text,
+  add column if not exists lz_message_hash text,
+  add column if not exists bridged_at timestamptz;
+
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.constraint_column_usage
+    where table_name = 'campaigns' and constraint_name = 'campaigns_bridge_status_check'
+  ) then
+    alter table public.campaigns
+      add constraint campaigns_bridge_status_check
+      check (bridge_status in (
+        'native','initiated','evm_confirmed','cctp_attested','solana_minted','active','failed'
+      ));
+  end if;
+end $$;
+
+create index if not exists campaigns_bridge_status_idx
+  on public.campaigns(bridge_status) where bridge_status <> 'native';
+create index if not exists campaigns_cctp_nonce_idx
+  on public.campaigns(cctp_nonce) where cctp_nonce is not null;
+
+-- Backfill: existing rows predate cross-chain. The legacy `chain` column
+-- (line 41) had a misleading default of 'base-sepolia'; treat `source_chain`
+-- as the new source of truth.
+update public.campaigns set source_chain = 'solana-devnet'
+  where source_chain is null;
