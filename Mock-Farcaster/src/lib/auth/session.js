@@ -17,12 +17,12 @@ function decodeSessionPayload(token) {
   }
 }
 
-export async function createSessionToken({ address, chainId }) {
+export async function createSessionToken({ address }) {
   const issuedAt = nowSeconds();
 
+  // Solana pubkeys are base58 and case-sensitive — store as-is.
   return encodeSessionPayload({
-    address: address.toLowerCase(),
-    chainId,
+    address,
     exp: issuedAt + SESSION_MAX_AGE_SECONDS,
     iat: issuedAt,
   });
@@ -49,14 +49,13 @@ export async function verifySessionToken(token) {
 
   return {
     address: payload.address,
-    chainId: typeof payload.chainId === "number" ? payload.chainId : null,
     exp: payload.exp,
     iat: typeof payload.iat === "number" ? payload.iat : null,
   };
 }
 
-export async function setSessionCookie({ address, chainId }) {
-  const token = await createSessionToken({ address, chainId });
+export async function setSessionCookie({ address }) {
+  const token = await createSessionToken({ address });
   const cookieStore = await cookies();
 
   cookieStore.set(SESSION_COOKIE_NAME, token, {

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { AntiReplay } from "./antiReplay.js";
 import { ChainClient } from "./chain.js";
 import { loadConfig } from "./config.js";
+import { EventListener } from "./eventListener.js";
 import { SessionBuffer } from "./sessionBuffer.js";
 import { SyncClient } from "./syncClient.js";
 import { scoreSignals } from "./verifier.js";
@@ -43,6 +44,9 @@ async function main() {
     cfg.antiReplayLruSize,
     cfg.antiReplayTtlMs,
   );
+
+  const eventListener = new EventListener(cfg, chain.connection, sync);
+  eventListener.start();
 
   let active = false;
 

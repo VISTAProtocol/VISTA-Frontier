@@ -1,43 +1,10 @@
 "use client";
 
-import Link from "next/link";
-import { ChevronRight, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import VistaEarningsPanel from "@/modules/vista/VistaEarningsPanel";
 import VistaOnboardingCard from "@/modules/vista/components/VistaOnboardingCard";
-import { useMemo } from "react";
-import { useBalance } from "wagmi";
-import { BASE_CHAIN_ID } from "@/lib/auth/base-sepolia-chain";
 
-export default function TrendingSection({ channels, links, currentUser }) {
-  const walletAddress = currentUser?.address;
-
-  const {
-    data: walletBalance,
-    isPending: isBalanceLoading,
-    isError: isBalanceError,
-  } = useBalance({
-    address: walletAddress,
-    chainId: BASE_CHAIN_ID,
-    query: {
-      enabled: Boolean(walletAddress),
-      refetchInterval: 15000,
-    },
-  });
-
-  const formattedBalance = useMemo(() => {
-    if (!walletBalance) {
-      return null;
-    }
-
-    const decimals = walletBalance.decimals;
-    const raw = Number(walletBalance.value) / 10 ** decimals;
-
-    return new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 6,
-    }).format(raw);
-  }, [walletBalance]);
-
+export default function TrendingSection({ channels, currentUser }) {
   return (
     <aside className="space-y-4 lg:sticky lg:top-4 mt-4">
       <div className="rounded-xl flex flex-row items-center border border-white/10 bg-[#0b0b0f] p-2.5">

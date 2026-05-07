@@ -3,8 +3,9 @@ import { NONCE_TTL_MS } from "@/lib/auth/constants";
 
 const nonceStore = new Map();
 
+// Solana base58 pubkeys are case-sensitive — do NOT lowercase. Just trim.
 function normalizeAddress(address) {
-  return typeof address === "string" ? address.trim().toLowerCase() : "";
+  return typeof address === "string" ? address.trim() : "";
 }
 
 function cleanupExpiredNonces() {
