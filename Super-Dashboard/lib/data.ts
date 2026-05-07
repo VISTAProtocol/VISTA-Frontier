@@ -107,6 +107,8 @@ function normalizeTick(row: Record<string, unknown>): StreamTickRecord {
     publisher_wallet: normalizeWallet(String(row.publisher_wallet)),
     user_amount: safeNumber(row.user_amount as string | number),
     publisher_amount: safeNumber(row.publisher_amount as string | number),
+    validator_amount: safeNumber(row.validator_amount as string | number),
+    vista_amount: safeNumber(row.vista_amount as string | number),
     total_amount: safeNumber(row.total_amount as string | number),
     seconds_elapsed: Number(row.seconds_elapsed ?? 0),
     block_timestamp: String(row.block_timestamp),
@@ -259,6 +261,11 @@ async function selectRoleRecord<T extends RoleRecord>(
     throw new Error("Supabase client is not configured");
   }
 
+  if (role === "oracle") {
+    // Oracle registration lives in oracle_nodes (keyed by Solana pubkey, not
+    // EVM wallet). Resolve via /api/oracle/status — not via this helper.
+    return null;
+  }
   const table =
     role === "user"
       ? "users"
@@ -1034,6 +1041,12 @@ export async function createSession(input: {
 }
 
 export async function recordTick(payload: OracleTickPayload) {
+  const fallbackValidator = payload.totalAmount * 0.10;
+  const fallbackVista =
+    payload.totalAmount -
+    payload.userAmount -
+    payload.publisherAmount -
+    fallbackValidator;
   const tickRecord: StreamTickRecord = {
     id: crypto.randomUUID(),
     session_id_onchain: payload.sessionIdOnchain,
@@ -1041,6 +1054,8 @@ export async function recordTick(payload: OracleTickPayload) {
     publisher_wallet: normalizeWallet(payload.publisherWallet),
     user_amount: payload.userAmount,
     publisher_amount: payload.publisherAmount,
+    validator_amount: payload.validatorAmount ?? fallbackValidator,
+    vista_amount: payload.vistaAmount ?? Math.max(0, fallbackVista),
     total_amount: payload.totalAmount,
     seconds_elapsed: payload.secondsElapsed,
     block_timestamp: payload.blockTimestamp,
@@ -1217,10 +1232,10 @@ export async function createReceipt(payload: OracleReceiptPayload) {
   );
 
   // Fallback: if no ticks exist in DB yet (race condition or decoding failure),
-  // derive vault credit amounts from the oracle-reported usdcPaid using standard
-  // 40% user / 50% publisher protocol split.
+  // derive vault credit amounts from the oracle-reported usdcPaid using the
+  // protocol split: 30% user / 50% publisher / 10% validators / 10% VISTA.
   const effectiveUserAmount =
-    totalUserAmount > 0 ? totalUserAmount : payload.usdcPaid * 0.40;
+    totalUserAmount > 0 ? totalUserAmount : payload.usdcPaid * 0.30;
   const effectivePublisherAmount =
     totalPublisherAmount > 0 ? totalPublisherAmount : payload.usdcPaid * 0.50;
 
@@ -1828,9 +1843,15 @@ export async function endSession(input: {
     const missingSeconds = input.secondsVerified - totalRecordedSeconds;
     const missingTotalAmount =
       (missingSeconds / input.secondsVerified) * input.totalPaid;
-    const missingUserAmount = (missingTotalAmount * 40) / 100;
+    // Protocol split: 30% user / 50% publisher / 10% validators / 10% VISTA.
+    const missingUserAmount = (missingTotalAmount * 30) / 100;
     const missingPublisherAmount = (missingTotalAmount * 50) / 100;
-    // Vista amount is the remainder (not currently used for tracking in stream_ticks)
+    const missingValidatorAmount = (missingTotalAmount * 10) / 100;
+    const missingVistaAmount =
+      missingTotalAmount -
+      missingUserAmount -
+      missingPublisherAmount -
+      missingValidatorAmount;
 
     // Get session to extract user/publisher wallets
     const { data: session, error: sessionError } = await supabase
@@ -1849,6 +1870,8 @@ export async function endSession(input: {
         .publisher_wallet as string,
       user_amount: missingUserAmount,
       publisher_amount: missingPublisherAmount,
+      validator_amount: missingValidatorAmount,
+      vista_amount: missingVistaAmount,
       total_amount: missingTotalAmount,
       seconds_elapsed: missingSeconds,
       block_timestamp: input.endedAt,

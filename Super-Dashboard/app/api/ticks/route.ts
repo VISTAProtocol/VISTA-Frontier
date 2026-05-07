@@ -9,6 +9,8 @@ const schema = z.object({
   publisherWallet: z.string().min(6),
   userAmount: z.coerce.number().nonnegative(),
   publisherAmount: z.coerce.number().nonnegative(),
+  validatorAmount: z.coerce.number().nonnegative().optional(),
+  vistaAmount: z.coerce.number().nonnegative().optional(),
   totalAmount: z.coerce.number().nonnegative(),
   secondsElapsed: z.coerce.number().int().positive(),
   blockTimestamp: z.string().min(10),
@@ -23,6 +25,12 @@ export async function POST(request: Request) {
     parsed.userAmount = parsed.userAmount / 1_000_000
     parsed.publisherAmount = parsed.publisherAmount / 1_000_000
     parsed.totalAmount = parsed.totalAmount / 1_000_000
+    if (parsed.validatorAmount !== undefined) {
+      parsed.validatorAmount = parsed.validatorAmount / 1_000_000
+    }
+    if (parsed.vistaAmount !== undefined) {
+      parsed.vistaAmount = parsed.vistaAmount / 1_000_000
+    }
 
     const tick = await recordTick(parsed)
     return jsonOk(tick, 201)

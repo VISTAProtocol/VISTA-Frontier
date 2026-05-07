@@ -76,6 +76,14 @@ describe("vista_protocol", () => {
     [Buffer.from("session"), sessionId],
     program.programId,
   );
+  const [validatorPoolAuthority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("validator_pool_authority"), sessionId],
+    program.programId,
+  );
+  const [validatorPoolVault] = PublicKey.findProgramAddressSync(
+    [Buffer.from("validator_pool"), sessionId],
+    program.programId,
+  );
   const [userBalancePda] = PublicKey.findProgramAddressSync(
     [Buffer.from("balance"), userWallet.publicKey.toBuffer()],
     program.programId,
@@ -215,7 +223,12 @@ describe("vista_protocol", () => {
           session: sessionPda,
           userWallet: userWallet.publicKey,
           publisherWallet: publisherWallet.publicKey,
+          validatorPoolAuthority,
+          validatorPoolVault,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
         })
         .signers([advertiser])
         .rpc();
@@ -235,7 +248,12 @@ describe("vista_protocol", () => {
         session: sessionPda,
         userWallet: userWallet.publicKey,
         publisherWallet: publisherWallet.publicKey,
+        validatorPoolAuthority,
+        validatorPoolVault,
+        usdcMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
       })
       .signers([oracle])
       .rpc();
@@ -245,7 +263,7 @@ describe("vista_protocol", () => {
     expect(s.userWallet.toString()).to.equal(userWallet.publicKey.toString());
   });
 
-  it("tick_stream — splits 40/50/10 across 3 ticks of 5 seconds", async () => {
+  it("tick_stream — splits 30/50/10/10 across 3 ticks of 5 seconds", async () => {
     for (let i = 0; i < 3; i++) {
       await program.methods
         .tickStream(new BN(5))
@@ -259,6 +277,7 @@ describe("vista_protocol", () => {
           userVault,
           vaultAuthority,
           vistaWalletToken: vistaWalletAta,
+          validatorPoolVault,
           userBalance: userBalancePda,
           publisherBalance: publisherBalancePda,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -270,19 +289,22 @@ describe("vista_protocol", () => {
     }
 
     // 3 ticks * 5 seconds * 100_000 rate = 1_500_000 total
-    // user 40% = 600_000, publisher 50% = 750_000, vista 10% = 150_000
+    // user 30% = 450_000, publisher 50% = 750_000, validator 10% = 150_000, vista 10% = 150_000
     const userBalance = await program.account.userBalance.fetch(userBalancePda);
     const publisherBalance = await program.account.userBalance.fetch(
       publisherBalancePda,
     );
-    expect(userBalance.balance.toString()).to.equal("600000");
+    expect(userBalance.balance.toString()).to.equal("450000");
     expect(publisherBalance.balance.toString()).to.equal("750000");
 
     const vistaTokenAcc = await getAccount(connection, vistaWalletAta);
     expect(vistaTokenAcc.amount.toString()).to.equal("150000");
 
+    const validatorPoolAcc = await getAccount(connection, validatorPoolVault);
+    expect(validatorPoolAcc.amount.toString()).to.equal("150000");
+
     const userVaultAcc = await getAccount(connection, userVault);
-    expect(userVaultAcc.amount.toString()).to.equal("1350000"); // 600k + 750k
+    expect(userVaultAcc.amount.toString()).to.equal("1200000"); // 450k + 750k
 
     const c = await program.account.campaign.fetch(campaignPda);
     expect(c.remainingBudget.toString()).to.equal("8500000"); // 10M - 1.5M
@@ -345,7 +367,7 @@ describe("vista_protocol", () => {
       .rpc();
 
     const afterAta = await getAccount(connection, userAta);
-    expect(afterAta.amount.toString()).to.equal("600000");
+    expect(afterAta.amount.toString()).to.equal("450000");
 
     const userBalance = await program.account.userBalance.fetch(userBalancePda);
     expect(userBalance.balance.toString()).to.equal("0");

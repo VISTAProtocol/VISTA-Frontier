@@ -10,10 +10,16 @@ declare_id!("4Jp9E68gcEMUXTwtm7suQ5wKq6U9jDRK4KPuRs6fReCM");
 #[constant]
 pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 
-// Revenue split (out of 100). VISTA fee = 100 - USER_PCT - PUBLISHER_PCT,
+// Revenue split (out of 100). VISTA fee = 100 - USER_PCT - PUBLISHER_PCT - VALIDATOR_PCT,
 // computed as remainder so integer-division dust is absorbed by the protocol.
-const USER_PCT: u64 = 40;
+const USER_PCT: u64 = 30;
 const PUBLISHER_PCT: u64 = 50;
+const VALIDATOR_PCT: u64 = 10;
+
+// Address of the attention_aggregator program. drain_validator_pool checks
+// that the CPI caller's signer PDA derives from this program ID.
+#[constant]
+pub const ATTENTION_AGGREGATOR_ID: Pubkey = pubkey!("6MJxBMfkocuzdbR5wJRvh31BAVPrUmk454yB9HnwvXtH");
 
 #[program]
 pub mod vista_protocol {
@@ -193,9 +199,15 @@ pub mod vista_protocol {
             .checked_mul(PUBLISHER_PCT)
             .ok_or(VistaError::Overflow)?
             / 100;
-        let vista_amount = total_amount - user_amount - publisher_amount;
+        let validator_amount = total_amount
+            .checked_mul(VALIDATOR_PCT)
+            .ok_or(VistaError::Overflow)?
+            / 100;
+        let vista_amount = total_amount - user_amount - publisher_amount - validator_amount;
 
-        // Move USDC: campaign_vault → user_vault (user+publisher pool) and → vista_wallet ATA
+        // Move USDC: campaign_vault → user_vault (user+publisher pool),
+        // → validator_pool_vault (per-session escrow drained by aggregator),
+        // → vista_wallet ATA (protocol fee).
         let campaign_id = campaign.campaign_id;
         let cv_bump = campaign.vault_authority_bump;
         let cv_seeds: &[&[u8]] = &[b"campaign_vault_authority", campaign_id.as_ref(), &[cv_bump]];
@@ -212,6 +224,19 @@ pub mod vista_protocol {
                 signer_seeds,
             ),
             user_amount + publisher_amount,
+        )?;
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.campaign_vault.to_account_info(),
+                    to: ctx.accounts.validator_pool_vault.to_account_info(),
+                    authority: ctx.accounts.campaign_vault_authority.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            validator_amount,
         )?;
 
         token::transfer(
@@ -258,6 +283,8 @@ pub mod vista_protocol {
             total_amount,
             user_amount,
             publisher_amount,
+            validator_amount,
+            vista_amount,
             timestamp: Clock::get()?.unix_timestamp,
         });
         emit!(Credited {
@@ -275,6 +302,48 @@ pub mod vista_protocol {
             role: 1,
         });
         Ok(())
+    }
+
+    /// Drain a session's validator pool to the oracle_registry RewardVault.
+    /// CPI-only — caller must pass the aggregator_signer PDA derived from
+    /// ATTENTION_AGGREGATOR_ID.
+    pub fn drain_validator_pool(
+        ctx: Context<DrainValidatorPool>,
+        session_id: [u8; 32],
+    ) -> Result<u64> {
+        let expected_signer =
+            Pubkey::find_program_address(&[b"aggregator_signer"], &ATTENTION_AGGREGATOR_ID).0;
+        require_keys_eq!(
+            ctx.accounts.aggregator_signer.key(),
+            expected_signer,
+            VistaError::NotAggregator
+        );
+
+        let amount = ctx.accounts.validator_pool_vault.amount;
+        require!(amount > 0, VistaError::EmptyPool);
+
+        let bump = ctx.bumps.validator_pool_authority;
+        let seeds: &[&[u8]] = &[b"validator_pool_authority", session_id.as_ref(), &[bump]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.validator_pool_vault.to_account_info(),
+                    to: ctx.accounts.reward_vault.to_account_info(),
+                    authority: ctx.accounts.validator_pool_authority.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )?;
+
+        emit!(ValidatorPoolDrained {
+            session_id,
+            amount,
+            reward_vault: ctx.accounts.reward_vault.key(),
+        });
+        Ok(amount)
     }
 
     /// Closes the session and mints a soulbound receipt PDA to the viewer.
@@ -513,7 +582,26 @@ pub struct StartStream<'info> {
     /// CHECK: publisher wallet. Stored as session participant; not signing.
     pub publisher_wallet: UncheckedAccount<'info>,
 
+    /// CHECK: PDA owning the per-session validator pool.
+    #[account(seeds = [b"validator_pool_authority", session_id.as_ref()], bump)]
+    pub validator_pool_authority: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = oracle,
+        token::mint = usdc_mint,
+        token::authority = validator_pool_authority,
+        seeds = [b"validator_pool", session_id.as_ref()],
+        bump,
+    )]
+    pub validator_pool_vault: Account<'info, TokenAccount>,
+
+    #[account(address = config.usdc_mint)]
+    pub usdc_mint: Account<'info, Mint>,
+
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
@@ -572,6 +660,14 @@ pub struct TickStream<'info> {
     pub vista_wallet_token: Box<Account<'info, TokenAccount>>,
 
     #[account(
+        mut,
+        seeds = [b"validator_pool", session.session_id.as_ref()],
+        bump,
+        token::mint = config.usdc_mint,
+    )]
+    pub validator_pool_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(
         init_if_needed,
         payer = oracle,
         space = 8 + UserBalance::SIZE,
@@ -592,6 +688,34 @@ pub struct TickStream<'info> {
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+#[instruction(session_id: [u8; 32])]
+pub struct DrainValidatorPool<'info> {
+    /// CHECK: PDA derived from the attention_aggregator program; verified in
+    /// the instruction handler against ATTENTION_AGGREGATOR_ID.
+    pub aggregator_signer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"validator_pool", session_id.as_ref()],
+        bump,
+    )]
+    pub validator_pool_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: PDA authority that owns the validator_pool_vault.
+    #[account(
+        seeds = [b"validator_pool_authority", session_id.as_ref()],
+        bump,
+    )]
+    pub validator_pool_authority: UncheckedAccount<'info>,
+
+    /// CHECK: oracle_registry's reward vault (validated by mint match below).
+    #[account(mut, token::mint = validator_pool_vault.mint)]
+    pub reward_vault: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
@@ -788,6 +912,8 @@ pub struct StreamTick {
     pub total_amount: u64,
     pub user_amount: u64,
     pub publisher_amount: u64,
+    pub validator_amount: u64,
+    pub vista_amount: u64,
     pub timestamp: i64,
 }
 
@@ -833,6 +959,13 @@ pub struct VistaWalletSet {
     pub vista_wallet: Pubkey,
 }
 
+#[event]
+pub struct ValidatorPoolDrained {
+    pub session_id: [u8; 32],
+    pub amount: u64,
+    pub reward_vault: Pubkey,
+}
+
 // ─────────────────────────────── Errors ───────────────────────────────
 
 #[error_code]
@@ -871,6 +1004,10 @@ pub enum VistaError {
     NothingToWithdraw,
     #[msg("Vista wallet token account owner mismatch")]
     WrongVistaWallet,
+    #[msg("Caller is not the attention_aggregator program signer")]
+    NotAggregator,
+    #[msg("Validator pool is empty — nothing to drain")]
+    EmptyPool,
     #[msg("Arithmetic overflow")]
     Overflow,
 }

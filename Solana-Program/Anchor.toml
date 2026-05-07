@@ -8,10 +8,14 @@ skip-lint = false
 [programs.devnet]
 vista_bridge = "9R7UWcCQVXW4dKKLYLLRfGQf5prePQBMyTEwd2TMC8sE"
 vista_protocol = "4Jp9E68gcEMUXTwtm7suQ5wKq6U9jDRK4KPuRs6fReCM"
+oracle_registry = "Arf7oEFm7jjaUXYW8of4moy553kczWXxdtf1bDSRpynn"
+attention_aggregator = "6MJxBMfkocuzdbR5wJRvh31BAVPrUmk454yB9HnwvXtH"
 
 [programs.localnet]
 vista_bridge = "9R7UWcCQVXW4dKKLYLLRfGQf5prePQBMyTEwd2TMC8sE"
 vista_protocol = "4Jp9E68gcEMUXTwtm7suQ5wKq6U9jDRK4KPuRs6fReCM"
+oracle_registry = "Arf7oEFm7jjaUXYW8of4moy553kczWXxdtf1bDSRpynn"
+attention_aggregator = "6MJxBMfkocuzdbR5wJRvh31BAVPrUmk454yB9HnwvXtH"
 
 [registry]
 url = "https://api.apr.dev"

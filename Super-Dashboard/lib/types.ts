@@ -1,4 +1,4 @@
-export type RoleName = "advertiser" | "publisher" | "user"
+export type RoleName = "advertiser" | "publisher" | "user" | "oracle"
 export type PreferenceOption =
   | "tech"
   | "gaming"
@@ -81,10 +81,49 @@ export interface StreamTickRecord {
   publisher_wallet: string
   user_amount: number
   publisher_amount: number
+  validator_amount: number
+  vista_amount: number
   total_amount: number
   seconds_elapsed: number
   block_timestamp: string
   created_at: string
+}
+
+export interface OracleNodeRecord {
+  oracle_pubkey: string
+  endpoint_url: string
+  stake_amount: number
+  reward_balance: number
+  reputation: number
+  total_submissions: number
+  total_slashes: number
+  active: boolean
+  registered_at: string
+  unregistered_at: string | null
+  last_seen_at: string | null
+}
+
+export interface OracleSubmissionRecord {
+  id: string
+  session_id_onchain: string
+  oracle_pubkey: string
+  score: number
+  consensus_score: number | null
+  signals: Record<string, unknown> | null
+  submitted_at: string
+  was_outlier: boolean
+  is_settled: boolean
+  earned_amount: number
+  slashed_amount: number
+  settled_at: string | null
+}
+
+export interface OracleNetworkStats {
+  activeNodes: number
+  totalStaked: number
+  sessionsToday: number
+  networkAccuracyPercent: number
+  recentSlashes: number
 }
 
 export interface ReceiptRecord {
@@ -272,6 +311,8 @@ export interface OracleTickPayload {
   publisherWallet: string
   userAmount: number
   publisherAmount: number
+  validatorAmount?: number
+  vistaAmount?: number
   totalAmount: number
   secondsElapsed: number
   blockTimestamp: string

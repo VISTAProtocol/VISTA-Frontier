@@ -736,13 +736,48 @@ export default function NewCampaignPage() {
                   )}
 
                   {uploadState === "success" && costPer1000 !== null && (
-                    <div className="animate-in fade-in duration-500 mt-2 space-y-1 text-sm">
+                    <div className="animate-in fade-in duration-500 mt-2 space-y-3 text-sm">
                       <p className="text-muted-foreground">
                         Cost for 1,000 viewers watching full ad:{" "}
                         <span className="font-semibold text-foreground">
                           ${formatUsdc(costPer1000)} USDC
                         </span>
                       </p>
+                      <div className="rounded-[12px] border border-border/70 bg-background/60 p-3">
+                        <p className="mb-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                          Revenue distribution per ad dollar
+                        </p>
+                        <div className="space-y-1.5 font-mono text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">
+                              Publisher
+                            </span>
+                            <span className="text-foreground">
+                              50% &nbsp;→&nbsp; ${formatUsdc(costPer1000 * 0.5)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">User</span>
+                            <span className="text-foreground">
+                              30% &nbsp;→&nbsp; ${formatUsdc(costPer1000 * 0.3)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">
+                              Validators
+                            </span>
+                            <span className="text-foreground">
+                              10% &nbsp;→&nbsp; ${formatUsdc(costPer1000 * 0.1)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">VISTA</span>
+                            <span className="text-foreground">
+                              10% &nbsp;→&nbsp; ${formatUsdc(costPer1000 * 0.1)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
                       {estimatedReach !== null && (
                         <p className="text-primary font-medium">
                           With a ${formatUsdc(Number(totalBudget))} budget and{" "}

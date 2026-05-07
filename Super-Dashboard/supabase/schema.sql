@@ -62,10 +62,46 @@ create table if not exists public.stream_ticks (
   publisher_wallet text not null,
   user_amount numeric not null,
   publisher_amount numeric not null,
+  validator_amount numeric not null default 0,
+  vista_amount numeric not null default 0,
   total_amount numeric not null,
   seconds_elapsed integer not null,
   block_timestamp timestamptz not null,
   created_at timestamptz not null default now()
+);
+
+alter table public.stream_ticks
+  add column if not exists validator_amount numeric not null default 0;
+alter table public.stream_ticks
+  add column if not exists vista_amount numeric not null default 0;
+
+create table if not exists public.oracle_nodes (
+  oracle_pubkey text primary key,
+  endpoint_url text not null,
+  stake_amount numeric not null,
+  reward_balance numeric not null default 0,
+  reputation integer not null default 0,
+  total_submissions bigint not null default 0,
+  total_slashes bigint not null default 0,
+  active boolean not null default true,
+  registered_at timestamptz not null default now(),
+  unregistered_at timestamptz null,
+  last_seen_at timestamptz null
+);
+
+create table if not exists public.oracle_submissions (
+  id uuid primary key default gen_random_uuid(),
+  session_id_onchain text not null,
+  oracle_pubkey text not null references public.oracle_nodes(oracle_pubkey),
+  score integer not null,
+  consensus_score integer null,
+  signals jsonb null,
+  submitted_at timestamptz not null,
+  was_outlier boolean not null default false,
+  is_settled boolean not null default false,
+  earned_amount numeric not null default 0,
+  slashed_amount numeric not null default 0,
+  settled_at timestamptz null
 );
 
 create table if not exists public.receipts (
@@ -109,6 +145,9 @@ create index if not exists idx_receipts_campaign_id_onchain on public.receipts (
 create index if not exists idx_receipts_chain on public.receipts (chain);
 create index if not exists idx_receipts_platform on public.receipts (platform);
 create index if not exists idx_attention_profiles_wallet on public.attention_profiles (wallet_address);
+create index if not exists idx_oracle_nodes_active on public.oracle_nodes (active);
+create index if not exists idx_oracle_submissions_session on public.oracle_submissions (session_id_onchain);
+create index if not exists idx_oracle_submissions_oracle on public.oracle_submissions (oracle_pubkey);
 
 alter table public.users enable row level security;
 alter table public.publishers enable row level security;
@@ -118,6 +157,8 @@ alter table public.sessions enable row level security;
 alter table public.stream_ticks enable row level security;
 alter table public.receipts enable row level security;
 alter table public.attention_profiles enable row level security;
+alter table public.oracle_nodes enable row level security;
+alter table public.oracle_submissions enable row level security;
 
 drop policy if exists "users_select_all" on public.users;
 drop policy if exists "users_insert_all" on public.users;
@@ -175,8 +216,24 @@ create policy "attention_profiles_select_all" on public.attention_profiles for s
 create policy "attention_profiles_insert_all" on public.attention_profiles for insert with check (true);
 create policy "attention_profiles_update_all" on public.attention_profiles for update using (true) with check (true);
 
+drop policy if exists "oracle_nodes_select_all" on public.oracle_nodes;
+drop policy if exists "oracle_nodes_insert_all" on public.oracle_nodes;
+drop policy if exists "oracle_nodes_update_all" on public.oracle_nodes;
+create policy "oracle_nodes_select_all" on public.oracle_nodes for select using (true);
+create policy "oracle_nodes_insert_all" on public.oracle_nodes for insert with check (true);
+create policy "oracle_nodes_update_all" on public.oracle_nodes for update using (true) with check (true);
+
+drop policy if exists "oracle_submissions_select_all" on public.oracle_submissions;
+drop policy if exists "oracle_submissions_insert_all" on public.oracle_submissions;
+drop policy if exists "oracle_submissions_update_all" on public.oracle_submissions;
+create policy "oracle_submissions_select_all" on public.oracle_submissions for select using (true);
+create policy "oracle_submissions_insert_all" on public.oracle_submissions for insert with check (true);
+create policy "oracle_submissions_update_all" on public.oracle_submissions for update using (true) with check (true);
+
 alter publication supabase_realtime add table public.campaigns;
 alter publication supabase_realtime add table public.sessions;
 alter publication supabase_realtime add table public.stream_ticks;
 alter publication supabase_realtime add table public.receipts;
 alter publication supabase_realtime add table public.attention_profiles;
+alter publication supabase_realtime add table public.oracle_nodes;
+alter publication supabase_realtime add table public.oracle_submissions;
