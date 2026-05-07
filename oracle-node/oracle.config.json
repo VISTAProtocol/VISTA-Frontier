@@ -1,0 +1,15 @@
+{
+  "rpcUrl": "https://api.devnet.solana.com",
+  "programIds": {
+    "vistaProtocol": "4Jp9E68gcEMUXTwtm7suQ5wKq6U9jDRK4KPuRs6fReCM",
+    "oracleRegistry": "Arf7oEFm7jjaUXYW8of4moy553kczWXxdtf1bDSRpynn",
+    "attentionAggregator": "6MJxBMfkocuzdbR5wJRvh31BAVPrUmk454yB9HnwvXtH"
+  },
+  "dashboardUrl": "http://localhost:3031",
+  "windowSeconds": 10,
+  "selfCheckSeconds": 60,
+  "antiReplayMaxDriftMs": 1500,
+  "antiReplayLruSize": 200,
+  "antiReplayTtlMs": 300000,
+  "port": 4001
+}

@@ -1,5 +1,4 @@
 import { type ClassValue, clsx } from "clsx";
-import { keccak256, toHex } from "viem";
 import { twMerge } from "tailwind-merge";
 
 const compactFormatter = new Intl.NumberFormat("en-US", {
@@ -36,18 +35,17 @@ export function formatCompactNumber(value?: string | number | null) {
   return compactFormatter.format(safeNumber(value));
 }
 
+// Truncate a Solana base58 pubkey for compact display.
 export function truncateAddress(value?: string | null, visible = 4) {
-  if (!value) return "0x0000...0000";
-  if (value.length <= visible * 2 + 2) return value;
-
-  return `${value.slice(0, visible + 2)}...${value.slice(-visible)}`;
+  if (!value) return "————";
+  if (value.length <= visible * 2 + 3) return value;
+  return `${value.slice(0, visible)}…${value.slice(-visible)}`;
 }
 
 export function truncateHash(value?: string | null, visible = 6) {
-  if (!value) return "0x000000...000000";
-  if (value.length <= visible * 2 + 2) return value;
-
-  return `${value.slice(0, visible + 2)}...${value.slice(-visible)}`;
+  if (!value) return "————";
+  if (value.length <= visible * 2 + 3) return value;
+  return `${value.slice(0, visible)}…${value.slice(-visible)}`;
 }
 
 export function formatDateTime(value?: string | null) {
@@ -78,24 +76,21 @@ export function buildExplorerUrl(
   type: "tx" | "address" | "token",
   value: string,
 ) {
-  const base = "https://sepolia.basescan.org";
+  const base = "https://explorer.solana.com";
+  const cluster = "?cluster=devnet";
 
-  if (type === "address") {
-    return `${base}/address/${value}`;
+  if (type === "address" || type === "token") {
+    return `${base}/address/${value}${cluster}`;
   }
-
-  if (type === "token") {
-    return `${base}/token/${value}`;
-  }
-
-  return `${base}/tx/${value}`;
+  return `${base}/tx/${value}${cluster}`;
 }
 
-/** @deprecated use buildExplorerUrl */
-export const buildBaseSepoliaExplorerUrl = buildExplorerUrl;
-
-export function bytes32FromSeed(seed: string): `0x${string}` {
-  return keccak256(toHex(seed));
+// Deterministically derive a 32-byte id from a string seed (SHA-256).
+// Replaces the EVM keccak256 helper.
+export async function bytes32FromSeed(seed: string): Promise<Uint8Array> {
+  const data = new TextEncoder().encode(seed);
+  const hash = await crypto.subtle.digest("SHA-256", data as BufferSource);
+  return new Uint8Array(hash);
 }
 
 export function buildVistaPublisherApiKey(seed = crypto.randomUUID()) {

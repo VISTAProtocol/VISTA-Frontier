@@ -88,13 +88,24 @@ anchor deploy             # provider already set to devnet in Anchor.toml
 After first deploy, set up one-time state (admin signs):
 
 ```bash
-# pseudocode — replace with your client
-vista_protocol.initialize(
-  oracle:        <oracle_pk>,
-  vista_wallet:  <fee_recipient_pk>,
-  // usdc_mint account passed in must equal 4zMMC9... (enforced on-chain)
-)
+# scripts/initialize.ts is provided — reads env, derives PDAs, calls initialize()
+ORACLE_PUBKEY=<oracle_pk> \
+VISTA_WALLET_PUBKEY=<fee_recipient_pk> \
+npm run init
 ```
+
+The script is idempotent: if the Config PDA already exists, it exits cleanly. Use `set_oracle` / `set_vista_wallet` instructions to update later.
+
+Defaults (override via env):
+
+| Env | Default |
+|---|---|
+| `ANCHOR_PROVIDER_URL` | `https://api.devnet.solana.com` |
+| `ANCHOR_WALLET` | `~/.config/solana/id.json` |
+| `USDC_MINT` | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` (Circle devnet USDC) |
+| `VISTA_PROTOCOL_PROGRAM_ID` | synced devnet program id |
+| `ORACLE_PUBKEY` | **required** |
+| `VISTA_WALLET_PUBKEY` | **required** |
 
 ## Next steps
 

@@ -3,7 +3,7 @@
 import { CheckCircle2, Code2, Copy, ExternalLink, Key, LayoutGrid, Server, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { useAccount } from "wagmi";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -20,7 +20,7 @@ import { fetchJson } from "@/lib/http";
 import type { PublisherRecord } from "@/lib/types";
 
 export default function PublisherOnboardingPage() {
-  const { address } = useAccount();
+  const { address } = useVistaWallet();
   const [platformName, setPlatformName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<PublisherRecord | null>(null);

@@ -120,6 +120,14 @@ export const roleMeta: Record<
       "Earn USDC while your attention is verified and streamed live.",
     accent: "from-chart-3/20 via-chart-3/5 to-transparent",
   },
+  oracle: {
+    label: "Oracle",
+    dashboardPath: "/oracle/dashboard",
+    onboardingPath: "/oracle/dashboard",
+    description:
+      "Stake USDC, verify human attention, earn validator rewards.",
+    accent: "from-chart-4/20 via-chart-4/5 to-transparent",
+  },
 };
 
 export const roleNavigation: Record<
@@ -137,5 +145,9 @@ export const roleNavigation: Record<
   user: [
     { label: "Dashboard", href: "/user/dashboard" },
     { label: "History", href: "/user/history" },
+  ],
+  oracle: [
+    { label: "Dashboard", href: "/oracle/dashboard" },
+    { label: "Activity", href: "/oracle/activity" },
   ],
 };

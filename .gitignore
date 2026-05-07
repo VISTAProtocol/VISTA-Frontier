@@ -12,3 +12,6 @@ target/
 .anchor/
 test-ledger/
 .claude/
+
+# devnet-e2e.ts persistent actor keypairs (regenerated on demand)
+**/.devnet-e2e-keypairs/

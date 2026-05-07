@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { toast } from "sonner"
-import { useAccount } from "wagmi"
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label"
 import { fetchJson } from "@/lib/http"
 
 export default function AdvertiserOnboardingPage() {
-  const { address } = useAccount()
+  const { address } = useVistaWallet()
   const [companyName, setCompanyName] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
 

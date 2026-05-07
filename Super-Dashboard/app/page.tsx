@@ -1,13 +1,11 @@
 "use client";
 
-import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { ArrowRight, ExternalLink } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { toast } from "sonner";
-import { useAccount } from "wagmi";
 
 import { BrandMark } from "@/components/brand-mark";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -26,6 +24,7 @@ import {
 import { APP_TAGLINE, roleMeta } from "@/lib/constants";
 import { fetchJson } from "@/lib/http";
 import type { RoleName } from "@/lib/types";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 import { cn } from "@/lib/utils";
 
 const tickerItems = [
@@ -104,12 +103,29 @@ const roleCards: Record<
     ],
     cta: "Enter as User",
   },
+  oracle: {
+    tab: "Oracle",
+    badge: "Validate",
+    title: "Stake USDC. Verify human attention. Earn validator rewards.",
+    sub: "Run an oracle node, independently verify attention sessions, and split 10% of every ad dollar with other honest validators. Dishonest scores get slashed.",
+    icon: "/role-icons/end-user.webp",
+    metrics: [
+      { value: "100 USDC", label: "minimum stake (devnet)" },
+      { value: "10%", label: "of every tick to validators" },
+      { value: "10%", label: "stake slashed for outliers" },
+    ],
+    bullets: [
+      "Permissionless: stake USDC and start validating",
+      "Multi-oracle consensus: outliers get slashed automatically",
+      "Trustless attention market — no central operator required",
+    ],
+    cta: "Enter as Oracle",
+  },
 };
 
 export default function HomePage() {
   const router = useRouter();
-  const { openConnectModal } = useConnectModal();
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, openConnectModal } = useVistaWallet();
   const [activeRole, setActiveRole] = useState<RoleName>("advertiser");
   const [imageLoaded, setImageLoaded] = useState(false);
   const [pendingRole, setPendingRole] = useState<RoleName | null>(null);
@@ -434,8 +450,9 @@ export default function HomePage() {
                   USDC streams live
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  50% to the publisher. 50% to the viewer. Streamed to wallets
-                  in real time. Session ends — NFT receipt minted automatically.
+                  50% publisher · 30% viewer · 10% validators · 10% protocol.
+                  Streamed to wallets in real time. Session ends — NFT receipt
+                  minted automatically.
                 </p>
               </CardContent>
             </Card>
@@ -458,7 +475,7 @@ export default function HomePage() {
           </p>
 
           <div className="mt-6 flex flex-wrap gap-2">
-            {(["advertiser", "publisher", "user"] as RoleName[]).map((role) => (
+            {(["advertiser", "publisher", "user", "oracle"] as RoleName[]).map((role) => (
               <Button
                 key={role}
                 variant={activeRole === role ? "default" : "outline"}

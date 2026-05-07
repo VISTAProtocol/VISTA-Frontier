@@ -1,14 +1,13 @@
 "use client";
 
-import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
-import { useAccount } from "wagmi";
 
 import { LoadingScreen } from "@/components/loading-screen";
 import { roleMeta } from "@/lib/constants";
 import { fetchJson } from "@/lib/http";
 import type { RoleName } from "@/lib/types";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 export function RoleEntryRedirect({ role }: { role: RoleName }) {
   const router = useRouter();
@@ -16,11 +15,9 @@ export function RoleEntryRedirect({ role }: { role: RoleName }) {
   const routerRef = useRef(router);
   routerRef.current = router;
 
-  const { openConnectModal } = useConnectModal();
+  const { address, isConnected, status, openConnectModal } = useVistaWallet();
   const openConnectModalRef = useRef(openConnectModal);
   openConnectModalRef.current = openConnectModal;
-
-  const { address, isConnected, status } = useAccount();
   // Prevent the effect from firing twice when a redirect is already in flight.
   const redirectingRef = useRef(false);
 

@@ -4,6 +4,7 @@ import { Vista } from "@/lib/vista-sdk";
 
 const API_KEY = process.env.NEXT_PUBLIC_VISTA_API_KEY;
 const ORACLE_URL = process.env.NEXT_PUBLIC_VISTA_ORACLE_URL;
+const DASHBOARD_URL = process.env.NEXT_PUBLIC_VISTA_DASHBOARD_URL;
 const CAMPAIGN_ID = process.env.NEXT_PUBLIC_VISTA_CAMPAIGN_ID;
 const PUBLISHER_WALLET = process.env.NEXT_PUBLIC_VISTA_PUBLISHER_WALLET;
 
@@ -53,6 +54,7 @@ export function useVista({ userWallet, zoneId, campaignId }) {
           apiKey: API_KEY,
           userWallet,
           oracleUrl: ORACLE_URL,
+          dashboardUrl: DASHBOARD_URL,
           campaignId: resolvedCampaignId,
           publisherWallet: PUBLISHER_WALLET,
         });

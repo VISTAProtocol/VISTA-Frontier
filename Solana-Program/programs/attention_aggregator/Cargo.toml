@@ -1,0 +1,20 @@
+[package]
+name = "attention_aggregator"
+version = "0.1.0"
+edition = "2021"
+description = "Vista attention aggregator — multi-oracle consensus + slashing"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "attention_aggregator"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }

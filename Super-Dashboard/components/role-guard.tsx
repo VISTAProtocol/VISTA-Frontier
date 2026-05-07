@@ -1,13 +1,12 @@
 "use client";
 
-import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { useAccount } from "wagmi";
 
 import { LoadingScreen } from "@/components/loading-screen";
 import { fetchJson } from "@/lib/http";
 import type { RoleName } from "@/lib/types";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 export function RoleGuard({
   role,
@@ -25,11 +24,9 @@ export function RoleGuard({
   const routerRef = useRef(router);
   routerRef.current = router;
 
-  const { openConnectModal } = useConnectModal();
+  const { address, isConnected, status, openConnectModal } = useVistaWallet();
   const openConnectModalRef = useRef(openConnectModal);
   openConnectModalRef.current = openConnectModal;
-
-  const { address, isConnected, status } = useAccount();
 
   const [mounted, setMounted] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -47,7 +44,7 @@ export function RoleGuard({
     // Don't re-run if we're already mid-redirect.
     if (redirectingRef.current) return;
 
-    // Still waiting for wagmi to finish reconnecting from localStorage.
+    // Still waiting for wallet adapter to finish reconnecting.
     if (status === "connecting" || status === "reconnecting") return;
 
     let cancelled = false;

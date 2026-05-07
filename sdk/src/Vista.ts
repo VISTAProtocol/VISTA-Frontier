@@ -1,5 +1,6 @@
 import { AttentionCollector } from './AttentionCollector';
 import { HeartbeatSender } from './HeartbeatSender';
+import { OracleDiscovery } from './OracleDiscovery';
 import { SessionManager } from './SessionManager';
 import type {
   VistaConfig,
@@ -14,6 +15,7 @@ export class Vista {
   private config: VistaConfig | null = null;
   private collector: AttentionCollector | null = null;
   private sender: HeartbeatSender | null = null;
+  private discovery: OracleDiscovery | null = null;
   private sessionManager: SessionManager | null = null;
   private earnCallback: ((data: EarnCallbackData) => void) | null = null;
   private sessionAmount: number = 0;
@@ -38,11 +40,15 @@ export class Vista {
       'publisherWallet',
     ];
     for (const field of required) {
-      if (!config[field]) throw new Error(`VISTA: ${field} is required`);
+      const v = config[field];
+      if (v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)) {
+        throw new Error(`VISTA: ${field} is required`);
+      }
     }
     this.removeSessionEndListeners();
     this.config = config;
-    this.sender = new HeartbeatSender(config.oracleUrl);
+    this.discovery = new OracleDiscovery(config.oracleUrl, config.dashboardUrl);
+    this.sender = new HeartbeatSender(this.discovery);
     this.sessionManager = new SessionManager();
     this.setupSessionEndListeners();
   }
@@ -57,12 +63,13 @@ export class Vista {
     if (this.isActive) {
       throw new Error('VISTA: zone already attached, call detachZone() first');
     }
-    this.collector = new AttentionCollector(elementId);
+    this.collector = new AttentionCollector(elementId, this.config!.videoElementId);
     this.trackedElementId = elementId;
     this.isActive = true;
     if (this.config!.requireFullscreen) {
       this.setupFullscreenListener();
     }
+    this.discovery!.start();
     this.sender!.start(
       () => this.buildPayload(),
       (res) => this.handleResponse(res),
@@ -75,6 +82,7 @@ export class Vista {
     if (!this.isActive) return;
     this.isActive = false;
     this.sender?.stop();
+    this.discovery?.stop();
     this.collector?.destroy();
     this.collector = null;
     this.removeFullscreenListener();
@@ -353,19 +361,22 @@ export class Vista {
   }
 
   private async postSessionEnd(): Promise<void> {
-    if (!this.config || !this.sessionManager) return;
-    try {
-      await fetch(`${this.config.oracleUrl}/session/end`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: this.sessionManager.getSessionId(),
-          apiKey: this.config.apiKey,
-        }),
-      });
-    } catch (err) {
-      console.warn('[VISTA] Session end failed:', err);
-    }
+    if (!this.config || !this.sessionManager || !this.discovery) return;
+    const endpoints = this.discovery.getEndpoints();
+    if (endpoints.length === 0) return;
+    const body = JSON.stringify({
+      sessionId: this.sessionManager.getSessionId(),
+      apiKey: this.config.apiKey,
+    });
+    await Promise.allSettled(
+      endpoints.map((url) =>
+        fetch(`${url}/session/end`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        })
+      )
+    );
   }
 
   private setupFullscreenListener(): void {

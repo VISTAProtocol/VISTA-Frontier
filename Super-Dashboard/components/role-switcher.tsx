@@ -14,6 +14,7 @@ const roles: { value: RoleName; label: string }[] = [
   { value: "advertiser", label: "Advertiser" },
   { value: "publisher", label: "Publisher" },
   { value: "user", label: "User" },
+  { value: "oracle", label: "Oracle" },
 ]
 
 export function RoleSwitcher({ currentRole }: { currentRole?: RoleName }) {
@@ -21,7 +22,7 @@ export function RoleSwitcher({ currentRole }: { currentRole?: RoleName }) {
   const router = useRouter()
 
   // Only appear on role routes or landing page
-  const isRoleRoute = /^\/(advertiser|publisher|user)(\/|$)/.test(pathname)
+  const isRoleRoute = /^\/(advertiser|publisher|user|oracle)(\/|$)/.test(pathname)
   const isLandingPage = pathname === "/"
 
   if (!isRoleRoute && !isLandingPage) return null

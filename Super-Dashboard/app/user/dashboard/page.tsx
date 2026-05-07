@@ -11,11 +11,11 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
-  useAccount,
   useWriteContract,
   useWaitForTransactionReceipt,
   useReadContract,
-} from "wagmi";
+  formatEther,
+} from "@/lib/evm-shims";
 
 import { LoadingScreen } from "@/components/loading-screen";
 import { PageHeader } from "@/components/page-header";
@@ -41,11 +41,11 @@ import {
   normalizeReceiverBytes32,
 } from "@/lib/bridge";
 import type { UserDashboardData } from "@/lib/types";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 import { formatDateTime, formatUsdc } from "@/lib/utils";
-import { formatEther } from "viem";
 
 export default function UserDashboardPage() {
-  const { address } = useAccount();
+  const { address } = useVistaWallet();
   const [data, setData] = useState<UserDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [withdrawAmount, setWithdrawAmount] = useState<number | null>(null);
@@ -382,7 +382,7 @@ export default function UserDashboardPage() {
               <Label htmlFor="destinationChain">Destination chain</Label>
               <Select
                 value={bridgeDstEid}
-                onValueChange={(value) => setBridgeDstEid(value)}
+                onValueChange={(value) => setBridgeDstEid(value ?? "")}
               >
                 <SelectTrigger className="w-full" id="destinationChain">
                   <SelectValue placeholder="Select chain" />

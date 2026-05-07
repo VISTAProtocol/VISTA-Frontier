@@ -1,94 +1,28 @@
 "use client";
 
+import { useMemo } from "react";
 import {
-  RainbowKitProvider,
-  darkTheme,
-  lightTheme,
-} from "@rainbow-me/rainbowkit";
+  ConnectionProvider,
+  WalletProvider,
+} from "@solana/wallet-adapter-react";
+import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
+import {
+  PhantomWalletAdapter,
+  SolflareWalletAdapter,
+} from "@solana/wallet-adapter-wallets";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ThemeProvider, useTheme } from "next-themes";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { type State, WagmiProvider, useAccount } from "wagmi";
+import { ThemeProvider } from "next-themes";
 
+import "@solana/wallet-adapter-react-ui/styles.css";
 import { Toaster } from "@/components/ui/sonner";
-import { baseNetwork, wagmiConfig } from "@/lib/wagmi";
+import { RPC_URL } from "@/lib/solana";
 
-function AccountWatcher() {
-  const { address } = useAccount();
-  const previousAddress = useRef(address);
-  const hasHydrated = useRef(false);
-
-  useEffect(() => {
-    hasHydrated.current = true;
-  }, []);
-
-  useEffect(() => {
-    if (!hasHydrated.current) {
-      previousAddress.current = address;
-      return;
-    }
-
-    if (
-      previousAddress.current &&
-      address &&
-      previousAddress.current !== address
-    ) {
-      // Wallet address was changed in the provider extension
-      window.location.reload();
-    }
-    previousAddress.current = address;
-  }, [address]);
-
-  return null;
-}
-
-function RainbowShell({ children }: { children: React.ReactNode }) {
-  const { resolvedTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  const theme = useMemo(
-    () =>
-      mounted && resolvedTheme === "dark"
-        ? darkTheme({
-            accentColor: "#39b976",
-            borderRadius: "small",
-          })
-        : lightTheme({
-            accentColor: "#39b976",
-            borderRadius: "small",
-          }),
-    [mounted, resolvedTheme],
+export function Providers({ children }: { children: React.ReactNode }) {
+  const queryClient = useMemo(() => new QueryClient(), []);
+  const wallets = useMemo(
+    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
+    [],
   );
-
-  return (
-    <RainbowKitProvider
-      appInfo={{
-        appName: "VISTA Protocol",
-        learnMoreUrl: "https://sepolia.basescan.org",
-      }}
-      initialChain={baseNetwork}
-      modalSize="compact"
-      theme={theme}
-    >
-      <AccountWatcher />
-      {children}
-      <Toaster position="top-right" richColors />
-    </RainbowKitProvider>
-  );
-}
-
-export function Providers({
-  children,
-  initialState,
-}: {
-  children: React.ReactNode;
-  initialState?: State;
-}) {
-  const [queryClient] = useState(() => new QueryClient());
 
   return (
     <ThemeProvider
@@ -97,11 +31,16 @@ export function Providers({
       enableSystem
       disableTransitionOnChange
     >
-      <WagmiProvider config={wagmiConfig} initialState={initialState}>
-        <QueryClientProvider client={queryClient}>
-          <RainbowShell>{children}</RainbowShell>
-        </QueryClientProvider>
-      </WagmiProvider>
+      <ConnectionProvider endpoint={RPC_URL}>
+        <WalletProvider wallets={wallets} autoConnect>
+          <WalletModalProvider>
+            <QueryClientProvider client={queryClient}>
+              {children}
+              <Toaster position="top-right" richColors />
+            </QueryClientProvider>
+          </WalletModalProvider>
+        </WalletProvider>
+      </ConnectionProvider>
     </ThemeProvider>
   );
 }

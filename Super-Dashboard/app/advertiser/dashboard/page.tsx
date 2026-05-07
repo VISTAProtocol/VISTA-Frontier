@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { BarChart3, Coins, Eye, MousePointerClick } from "lucide-react"
 import { useEffect, useState } from "react"
-import { useAccount } from "wagmi"
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 import { EmptyState } from "@/components/empty-state"
 import { LoadingScreen } from "@/components/loading-screen"
@@ -25,7 +25,7 @@ import type { AdvertiserDashboardData } from "@/lib/types"
 import { cn, formatDateTime, formatUsdc } from "@/lib/utils"
 
 export default function AdvertiserDashboardPage() {
-  const { address } = useAccount()
+  const { address } = useVistaWallet()
   const [data, setData] = useState<AdvertiserDashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

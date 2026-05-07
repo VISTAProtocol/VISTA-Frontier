@@ -3,14 +3,8 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { parseUnits } from "viem";
-import {
-  useAccount,
-  useChainId,
-  useSwitchChain,
-  useWriteContract,
-} from "wagmi";
-import { readContract, simulateContract, waitForTransactionReceipt } from "wagmi/actions";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { BN } from "@coral-xyz/anchor";
 
 import { MetricChartCard } from "@/components/metric-chart-card";
 import { PageHeader } from "@/components/page-header";
@@ -30,19 +24,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { fetchJson } from "@/lib/http";
 import {
-  contractAddresses,
-  erc20Abi,
-  hasContractConfig,
-  vistaEscrowAbi,
-} from "@/lib/contracts";
-import {
   locationOptions,
   preferenceLabels,
   preferenceOptions,
 } from "@/lib/constants";
 import type { CampaignRecord, PreferenceOption } from "@/lib/types";
 import { buildExplorerUrl, bytes32FromSeed, cn, formatUsdc } from "@/lib/utils";
-import { baseSepoliaNetwork, wagmiConfig } from "@/lib/wagmi";
+import { useVistaProgram } from "@/lib/use-vista-program";
+import { depositCampaign, usdcToBn } from "@/lib/vista-actions";
 
 const VISTA_RATE = 0.000072; // USDC per viewer per second (fixed by VISTA Protocol)
 
@@ -179,10 +168,9 @@ const locationLabels = Object.fromEntries(
 ) as Record<(typeof locationOptions)[number], string>;
 
 export default function NewCampaignPage() {
-  const { address } = useAccount();
-  const chainId = useChainId();
-  const { switchChainAsync } = useSwitchChain();
-  const { writeContractAsync } = useWriteContract();
+  const { publicKey } = useWallet();
+  const address = publicKey?.toBase58() ?? null;
+  const program = useVistaProgram();
 
   const [title, setTitle] = useState("");
   const [landingUrl, setLandingUrl] = useState("");
@@ -204,29 +192,9 @@ export default function NewCampaignPage() {
   const [isMinting, setIsMinting] = useState(false);
 
   async function handleMintUSDC() {
-    if (!address) {
-      toast.error("Please connect your wallet first.");
-      return;
-    }
-    
-    setIsMinting(true);
-    try {
-      const res = await fetch("/api/faucet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address, amount: 1000 }),
-      });
-      
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to mint USDC");
-      
-      toast.success("Successfully minted 1,000 testnet USDC!");
-    } catch (err: any) {
-      console.error(err);
-      toast.error(err.message || "Failed to mint testnet USDC");
-    } finally {
-      setIsMinting(false);
-    }
+    // Get test USDC from Circle's faucet (devnet).
+    window.open("https://faucet.circle.com", "_blank", "noopener,noreferrer");
+    toast.info("Opening Circle faucet — paste your wallet address there.");
   }
 
   // Upload state
@@ -347,7 +315,10 @@ export default function NewCampaignPage() {
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!address) return;
+    if (!publicKey || !program) {
+      toast.error("Please connect your wallet first.");
+      return;
+    }
     if (!uploadResult) {
       toast.error("Please upload an ad creative first.");
       return;
@@ -356,13 +327,8 @@ export default function NewCampaignPage() {
     try {
       setIsSubmitting(true);
 
-      // Validate required fields
-      if (!title.trim()) {
-        throw new Error("Campaign title is required.");
-      }
-      if (!landingUrl.trim()) {
-        throw new Error("Landing page URL is required.");
-      }
+      if (!title.trim()) throw new Error("Campaign title is required.");
+      if (!landingUrl.trim()) throw new Error("Landing page URL is required.");
       try {
         new URL(landingUrl);
       } catch {
@@ -377,87 +343,33 @@ export default function NewCampaignPage() {
         throw new Error("Ad duration must be greater than zero.");
       }
 
-      if (chainId !== baseSepoliaNetwork.id) {
-        await switchChainAsync({ chainId: baseSepoliaNetwork.id });
-      }
+      // Derive a deterministic 32-byte campaign id from title + timestamp.
+      const campaignIdOnchain = await bytes32FromSeed(`${title}-${Date.now()}`);
 
-      const campaignIdOnchain = bytes32FromSeed(`${title}-${Date.now()}`);
-      let txHash: `0x${string}` | null = null;
+      // On-chain deposit: locks USDC into a per-campaign vault PDA.
+      const totalBudgetBn = usdcToBn(parsedBudget);
+      const ratePerSecondBn = usdcToBn(VISTA_RATE);
+      const durationBn = new BN(duration);
 
-      if (
-        hasContractConfig &&
-        contractAddresses.mockUsdc &&
-        contractAddresses.vistaEscrow
-      ) {
-        const amount = parseUnits(totalBudget, 6);
+      const txSignature = await depositCampaign(program, {
+        campaignId: campaignIdOnchain,
+        advertiser: publicKey,
+        totalBudget: totalBudgetBn,
+        ratePerSecond: ratePerSecondBn,
+        duration: durationBn,
+      });
 
-        // Check current allowance first to avoid unnecessary transactions
-        // and race conditions
-        const [currentAllowance, currentBalance] = await Promise.all([
-          readContract(wagmiConfig, {
-            abi: erc20Abi,
-            address: contractAddresses.mockUsdc,
-            functionName: "allowance",
-            args: [address, contractAddresses.vistaEscrow],
-          }) as Promise<bigint>,
-          readContract(wagmiConfig, {
-            abi: erc20Abi,
-            address: contractAddresses.mockUsdc,
-            functionName: "balanceOf",
-            args: [address],
-          }) as Promise<bigint>,
-        ]);
-
-        if (currentBalance < amount) {
-          throw new Error(
-            `Insufficient mUSDC balance. You have ${formatUsdc(Number(currentBalance) / 1e6)} but need ${formatUsdc(Number(amount) / 1e6)} mUSDC.`
-          );
-        }
-
-        if (currentAllowance < amount) {
-          const approvalHash = await writeContractAsync({
-            abi: erc20Abi,
-            address: contractAddresses.mockUsdc,
-            functionName: "approve",
-            args: [contractAddresses.vistaEscrow, amount],
-            chainId: baseSepoliaNetwork.id,
-          });
-
-          await waitForTransactionReceipt(wagmiConfig, { hash: approvalHash });
-          // Wait 2 seconds for load-balanced RPC nodes to sync the new state
-          await new Promise((r) => setTimeout(r, 2000));
-        }
-
-        const ratePerSecondOnchain = parseUnits(VISTA_RATE.toFixed(6), 6);
-
-        // Simulate first to surface the actual revert reason before writing
-        const { request: depositRequest } = await simulateContract(wagmiConfig, {
-          abi: vistaEscrowAbi,
-          address: contractAddresses.vistaEscrow,
-          functionName: "deposit",
-          args: [
-            campaignIdOnchain,
-            amount,
-            ratePerSecondOnchain,
-            BigInt(duration),
-          ],
-          chainId: baseSepoliaNetwork.id,
-          account: address,
-        });
-
-        txHash = await writeContractAsync(depositRequest);
-
-        await waitForTransactionReceipt(wagmiConfig, { hash: txHash });
-      } else {
-        toast.warning(
-          "Contract addresses are not configured, so launch is running in demo mode.",
-        );
-      }
+      // Hex string for downstream APIs that still expect bytes32.
+      const campaignIdHex =
+        "0x" +
+        Array.from(campaignIdOnchain)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
 
       const campaign = await fetchJson<CampaignRecord>("/api/campaigns", {
         method: "POST",
         body: JSON.stringify({
-          campaignIdOnchain,
+          campaignIdOnchain: campaignIdHex,
           advertiserWallet: address,
           title,
           creativeUrl: uploadResult.publicUrl,
@@ -471,12 +383,10 @@ export default function NewCampaignPage() {
         }),
       });
 
-      setLaunchResult({
-        txHash: txHash ?? bytes32FromSeed(`vista-demo-launch-${Date.now()}`),
-        campaign,
-      });
-      toast.success("Campaign launched successfully.");
+      setLaunchResult({ txHash: txSignature, campaign });
+      toast.success("Campaign launched on Solana devnet.");
     } catch (error) {
+      console.error(error);
       toast.error(
         error instanceof Error ? error.message : "Unable to launch campaign.",
       );
@@ -776,7 +686,7 @@ export default function NewCampaignPage() {
                       disabled={isMinting}
                       className="h-7 text-xs"
                     >
-                      {isMinting ? "Minting..." : "Mint Testnet USDC"}
+                      Get Devnet USDC
                     </Button>
                   </div>
                   <Input
@@ -826,13 +736,48 @@ export default function NewCampaignPage() {
                   )}
 
                   {uploadState === "success" && costPer1000 !== null && (
-                    <div className="animate-in fade-in duration-500 mt-2 space-y-1 text-sm">
+                    <div className="animate-in fade-in duration-500 mt-2 space-y-3 text-sm">
                       <p className="text-muted-foreground">
                         Cost for 1,000 viewers watching full ad:{" "}
                         <span className="font-semibold text-foreground">
                           ${formatUsdc(costPer1000)} USDC
                         </span>
                       </p>
+                      <div className="rounded-[12px] border border-border/70 bg-background/60 p-3">
+                        <p className="mb-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                          Revenue distribution per ad dollar
+                        </p>
+                        <div className="space-y-1.5 font-mono text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">
+                              Publisher
+                            </span>
+                            <span className="text-foreground">
+                              50% &nbsp;→&nbsp; ${formatUsdc(costPer1000 * 0.5)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">User</span>
+                            <span className="text-foreground">
+                              30% &nbsp;→&nbsp; ${formatUsdc(costPer1000 * 0.3)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">
+                              Validators
+                            </span>
+                            <span className="text-foreground">
+                              10% &nbsp;→&nbsp; ${formatUsdc(costPer1000 * 0.1)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">VISTA</span>
+                            <span className="text-foreground">
+                              10% &nbsp;→&nbsp; ${formatUsdc(costPer1000 * 0.1)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
                       {estimatedReach !== null && (
                         <p className="text-primary font-medium">
                           With a ${formatUsdc(Number(totalBudget))} budget and{" "}
@@ -984,11 +929,11 @@ export default function NewCampaignPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
-              <p>1. Generate a deterministic bytes32 campaign ID.</p>
-              <p>2. Approve mUSDC spend to the VistaEscrow contract.</p>
-              <p>3. Deposit budget on Base Sepolia.</p>
+              <p>1. Generate a deterministic 32-byte campaign ID.</p>
+              <p>2. Sign deposit_campaign transaction (Phantom/Solflare).</p>
+              <p>3. USDC moves into the campaign vault PDA on Solana devnet.</p>
               <p>4. Persist campaign metadata in Supabase.</p>
-              <p>5. Show transaction hash with explorer link.</p>
+              <p>5. Show transaction signature with Solana Explorer link.</p>
             </CardContent>
           </Card>
 
@@ -1026,7 +971,7 @@ export default function NewCampaignPage() {
                     href={buildExplorerUrl("tx", launchResult.txHash)}
                     target="_blank"
                   >
-                    View on Base Sepolia Explorer
+                    View on Solana Explorer
                   </Link>
                 </div>
               </CardContent>

@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { ReceiptText } from "lucide-react"
 import { useEffect, useState } from "react"
-import { useAccount } from "wagmi"
+import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 import { LoadingScreen } from "@/components/loading-screen"
 import { PageHeader } from "@/components/page-header"
@@ -22,7 +22,7 @@ import type { UserHistoryData } from "@/lib/types"
 import { cn, formatDateTime, formatUsdc, truncateHash } from "@/lib/utils"
 
 export default function UserHistoryPage() {
-  const { address } = useAccount()
+  const { address } = useVistaWallet()
   const [data, setData] = useState<UserHistoryData | null>(null)
 
   useEffect(() => {
