@@ -1,0 +1,6 @@
+[programs.localnet]
+vista_bridge = "VistaBridge11111111111111111111111111111111"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"

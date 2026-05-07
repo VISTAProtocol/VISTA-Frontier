@@ -4,6 +4,7 @@ import {
   Coins,
   Flame,
   Layers3,
+  Sparkles,
   TimerReset,
   Wallet,
   ArrowDownToLine,
@@ -23,16 +24,38 @@ import { UsdcCounter } from "@/components/usdc-counter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { fetchJson } from "@/lib/http";
 import { contractAddresses, vistaVaultAbi } from "@/lib/contracts";
+import {
+  getBridgeFee,
+  normalizeBridgeOptions,
+  normalizeReceiverBytes32,
+} from "@/lib/bridge";
 import type { UserDashboardData } from "@/lib/types";
-import { formatUsdc } from "@/lib/utils";
+import { formatDateTime, formatUsdc } from "@/lib/utils";
+import { formatEther } from "viem";
 
 export default function UserDashboardPage() {
   const { address } = useAccount();
   const [data, setData] = useState<UserDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [withdrawAmount, setWithdrawAmount] = useState<number | null>(null);
+  const [bridgeReceiptId, setBridgeReceiptId] = useState<string>("");
+  const [bridgeDstEid, setBridgeDstEid] = useState<string>("");
+  const [bridgeReceiver, setBridgeReceiver] = useState<string>(
+    process.env.NEXT_PUBLIC_VISTA_BRIDGE_RECEIVER ?? "",
+  );
+  const [bridgeOptions, setBridgeOptions] = useState<string>("0x");
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
 
   const {
     writeContract,
@@ -44,6 +67,16 @@ export default function UserDashboardPage() {
   const { isLoading: isConfirming, isSuccess: isWithdrawn } =
     useWaitForTransactionReceipt({ hash: withdrawTxHash });
 
+  const {
+    writeContract: writeBridgeClaim,
+    data: bridgeTxHash,
+    isPending: isBridgePending,
+    error: bridgeTxError,
+    reset: resetBridge,
+  } = useWriteContract();
+  const { isLoading: isBridgeConfirming, isSuccess: isBridgeConfirmed } =
+    useWaitForTransactionReceipt({ hash: bridgeTxHash });
+
   const { data: onChainBalance, refetch: refetchBalance } = useReadContract({
     address: contractAddresses.vistaVault ?? undefined,
     abi: vistaVaultAbi,
@@ -51,6 +84,44 @@ export default function UserDashboardPage() {
     args: address ? [address] : undefined,
     query: { enabled: Boolean(address && contractAddresses.vistaVault) },
   });
+
+  const receiverBytes32 = normalizeReceiverBytes32(bridgeReceiver);
+  const bridgeOptionsBytes = normalizeBridgeOptions(bridgeOptions);
+  let parsedReceiptId: bigint | null = null;
+  try {
+    parsedReceiptId = bridgeReceiptId ? BigInt(bridgeReceiptId) : null;
+  } catch {
+    parsedReceiptId = null;
+  }
+  const parsedDstEid = bridgeDstEid ? Number(bridgeDstEid) : null;
+  const dstEidValid =
+    parsedDstEid != null &&
+    Number.isInteger(parsedDstEid) &&
+    parsedDstEid >= 0 &&
+    parsedDstEid <= 0xffffffff;
+  const canQuoteBridge =
+    Boolean(
+      contractAddresses.vistaVault &&
+        address &&
+        parsedReceiptId != null &&
+        parsedDstEid != null &&
+        receiverBytes32,
+    ) &&
+    dstEidValid;
+
+  const { data: bridgeQuote } = useReadContract({
+    address: contractAddresses.vistaVault ?? undefined,
+    abi: vistaVaultAbi,
+    functionName: "quoteBridgeClaim",
+    args:
+      canQuoteBridge && receiverBytes32 && parsedReceiptId != null && parsedDstEid != null
+        ? [parsedReceiptId, parsedDstEid, receiverBytes32, bridgeOptionsBytes]
+        : undefined,
+    account: address ?? undefined,
+    query: { enabled: canQuoteBridge },
+  });
+
+  const resolvedQuote = getBridgeFee(bridgeQuote);
 
   useEffect(() => {
     if (!address) return;
@@ -138,6 +209,33 @@ export default function UserDashboardPage() {
     });
   }
 
+  function handleBridgeClaim() {
+    if (!contractAddresses.vistaVault) return;
+    if (!parsedReceiptId || parsedDstEid == null || !receiverBytes32) {
+      setBridgeError("Provide receipt token ID, destination EID, and receiver.");
+      return;
+    }
+    if (!resolvedQuote) {
+      setBridgeError("Quote unavailable. Check inputs and try again.");
+      return;
+    }
+
+    setBridgeError(null);
+    resetBridge();
+    writeBridgeClaim({
+      address: contractAddresses.vistaVault,
+      abi: vistaVaultAbi,
+      functionName: "requestBridgeClaim",
+      args: [
+        parsedReceiptId,
+        parsedDstEid,
+        receiverBytes32,
+        bridgeOptionsBytes,
+      ],
+      value: resolvedQuote.nativeFee,
+    });
+  }
+
   if (error) {
     return <LoadingScreen description={`Error: ${error}`} />;
   }
@@ -170,12 +268,18 @@ export default function UserDashboardPage() {
         walletAddress={address}
       />
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard
           icon={Coins}
           title="Total USDC withdrawn"
           value={data.vault.totalWithdrawn}
           format="usdc"
+        />
+        <StatCard
+          icon={Sparkles}
+          title="Attention score"
+          value={`${(data.stats.attentionScore * 100).toFixed(1)}%`}
+          hint={`Updated ${formatDateTime(data.stats.attentionUpdatedAt)}`}
         />
         <StatCard
           icon={Layers3}
@@ -250,6 +354,125 @@ export default function UserDashboardPage() {
               )}
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-6 p-6">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
+              Bridge your rewards
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Claim Vista tokens on another chain using your receipt NFT. You pay
+              the bridge fee.
+            </p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="receiptTokenId">Receipt token ID</Label>
+              <Input
+                id="receiptTokenId"
+                placeholder="e.g. 12"
+                value={bridgeReceiptId}
+                onChange={(event) => setBridgeReceiptId(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="destinationChain">Destination chain</Label>
+              <Select
+                value={bridgeDstEid}
+                onValueChange={(value) => setBridgeDstEid(value)}
+              >
+                <SelectTrigger className="w-full" id="destinationChain">
+                  <SelectValue placeholder="Select chain" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Custom / Unknown</SelectItem>
+                  {process.env.NEXT_PUBLIC_LZ_EID_BASE ? (
+                    <SelectItem value={process.env.NEXT_PUBLIC_LZ_EID_BASE}>
+                      Base
+                    </SelectItem>
+                  ) : null}
+                  {process.env.NEXT_PUBLIC_LZ_EID_ETH ? (
+                    <SelectItem value={process.env.NEXT_PUBLIC_LZ_EID_ETH}>
+                      Ethereum
+                    </SelectItem>
+                  ) : null}
+                  {process.env.NEXT_PUBLIC_LZ_EID_MONAD ? (
+                    <SelectItem value={process.env.NEXT_PUBLIC_LZ_EID_MONAD}>
+                      Monad
+                    </SelectItem>
+                  ) : null}
+                  {process.env.NEXT_PUBLIC_LZ_EID_SOLANA ? (
+                    <SelectItem value={process.env.NEXT_PUBLIC_LZ_EID_SOLANA}>
+                      Solana
+                    </SelectItem>
+                  ) : null}
+                </SelectContent>
+              </Select>
+              <Input
+                className="mt-2"
+                placeholder="Destination EID (uint32)"
+                value={bridgeDstEid}
+                onChange={(event) => setBridgeDstEid(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="receiver">Bridge receiver (bytes32 or address)</Label>
+              <Input
+                id="receiver"
+                placeholder="0x..."
+                value={bridgeReceiver}
+                onChange={(event) => setBridgeReceiver(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="options">LayerZero options (hex)</Label>
+              <Input
+                id="options"
+                placeholder="0x"
+                value={bridgeOptions}
+                onChange={(event) => setBridgeOptions(event.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-4 text-sm">
+            <div className="space-y-1 text-muted-foreground">
+              <p>
+                Estimated fee:{" "}
+                {resolvedQuote
+                  ? `${formatEther(resolvedQuote.nativeFee)} native`
+                  : "—"}
+              </p>
+              <p>
+                Receiver bytes32:{" "}
+                {receiverBytes32 ?? "Invalid receiver"}
+              </p>
+            </div>
+            <Button
+              onClick={handleBridgeClaim}
+              disabled={!canQuoteBridge || isBridgePending || isBridgeConfirming}
+              size="lg"
+            >
+              {isBridgePending || isBridgeConfirming
+                ? "Bridging..."
+                : "Bridge claim"}
+            </Button>
+          </div>
+          {bridgeError && (
+            <p className="text-xs text-destructive">{bridgeError}</p>
+          )}
+          {bridgeTxError && (
+            <p className="text-xs text-destructive">
+              {bridgeTxError.message.split("\n")[0]}
+            </p>
+          )}
+          {isBridgeConfirmed && (
+            <p className="text-xs text-green-600 dark:text-green-400">
+              Bridge request sent!
+            </p>
+          )}
         </CardContent>
       </Card>
 

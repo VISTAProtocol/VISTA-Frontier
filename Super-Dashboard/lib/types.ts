@@ -231,6 +231,8 @@ export interface UserDashboardData {
     totalSessionsCompleted: number
     totalSecondsVerified: number
     favoriteAdCategory: string
+    attentionScore: number
+    attentionUpdatedAt: string
   }
   liveSession: {
     sessionId: string | null

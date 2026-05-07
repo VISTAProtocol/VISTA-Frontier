@@ -1339,10 +1339,11 @@ export async function getActiveCampaignsForUser(
 export async function getUserDashboard(
   wallet: string,
 ): Promise<UserDashboardData> {
-  const [sessions, ticks, vaultBalance] = await Promise.all([
+  const [sessions, ticks, vaultBalance, attentionScore] = await Promise.all([
     selectSessions({ userWallet: wallet }),
     selectTicks({ userWallet: wallet }),
     getVaultBalance(wallet),
+    getAttentionScore(wallet),
   ]);
   const campaigns = await Promise.all(
     Array.from(
@@ -1391,6 +1392,8 @@ export async function getUserDashboard(
         sessions.map((session) => session.seconds_verified),
       ),
       favoriteAdCategory,
+      attentionScore: attentionScore.score,
+      attentionUpdatedAt: attentionScore.updatedAt,
     },
     liveSession: {
       sessionId: activeSession?.session_id_onchain ?? null,

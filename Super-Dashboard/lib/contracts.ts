@@ -19,6 +19,8 @@ export const vistaVaultAbi = parseAbi([
   "function withdraw() external",
   "function getBalance(address wallet) external view returns (uint256)",
   "function getEarningRecords(address wallet) external view returns ((bytes32 sessionId, address publisherWallet, bytes32 campaignId, uint256 amount, uint8 role, uint256 timestamp)[])",
+  "function quoteBridgeClaim(uint256 receiptTokenId, uint32 dstEid, bytes32 receiver, bytes options) external view returns (uint256 nativeFee, uint256 lzTokenFee)",
+  "function requestBridgeClaim(uint256 receiptTokenId, uint32 dstEid, bytes32 receiver, bytes options) external payable",
 ])
 
 const rawContracts = {

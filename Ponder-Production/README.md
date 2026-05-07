@@ -38,6 +38,9 @@ cp .env.example .env
 | `VISTA_VAULT_ADDRESS`   | From `vista-contracts/deployments.json`                         |
 | `VISTA_RECEIPT_ADDRESS` | From `vista-contracts/deployments.json`                         |
 | `START_BLOCK`           | Block number of the deployment transaction (see below)          |
+| `VISTA_CHAIN`           | Chain slug (e.g. base-sepolia) for receipts payload             |
+| `VISTA_CHAIN_ID`        | Chain id (e.g. 84532) for receipts payload                      |
+| `VISTA_PLATFORM`        | Publisher platform label (optional)                             |
 
 ### 3. Find START_BLOCK
 

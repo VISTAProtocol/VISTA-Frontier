@@ -27,6 +27,11 @@ cp .env.example .env
 #   ORACLE_PRIVATE_KEY  — private key of wallet set as authorizedOracle in VistaStream
 #   BASE_RPC_URL       — Base Sepolia RPC endpoint
 #   ORACLE_SECRET       — shared secret for SDK authentication
+#   DASHBOARD_API_URL   — dashboard base URL for sync
+#   DASHBOARD_API_SECRET — must match dashboard ORACLE_WEBHOOK_SECRET
+#   VISTA_CHAIN         — chain slug (e.g. base-sepolia)
+#   VISTA_CHAIN_ID      — chain id (e.g. 84532)
+#   VISTA_PLATFORM      — publisher platform name (optional)
 ```
 
 **4. Register oracle wallet on-chain** (if deployer != oracle wallet)
