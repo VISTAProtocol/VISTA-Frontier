@@ -81,6 +81,21 @@ function normalizeCampaign(row: Record<string, unknown>): CampaignRecord {
     active: Boolean(row.active),
     chain: String(row.chain ?? 'base-sepolia'),
     created_at: String(row.created_at),
+    source_chain: (row.source_chain as CampaignRecord["source_chain"]) ?? null,
+    advertiser_evm_address:
+      row.advertiser_evm_address == null
+        ? null
+        : String(row.advertiser_evm_address),
+    bridge_status:
+      (row.bridge_status as CampaignRecord["bridge_status"]) ?? "native",
+    cctp_nonce: row.cctp_nonce == null ? null : Number(row.cctp_nonce),
+    source_chain_tx_hash:
+      row.source_chain_tx_hash == null
+        ? null
+        : String(row.source_chain_tx_hash),
+    lz_message_hash:
+      row.lz_message_hash == null ? null : String(row.lz_message_hash),
+    bridged_at: row.bridged_at == null ? null : String(row.bridged_at),
   };
 }
 
@@ -719,7 +734,14 @@ export async function createCampaign(input: {
   targetMaxAge: number | null;
   targetLocations: string[];
   chain?: string;
-}) {
+  // Cross-chain advertiser deposit fields. When omitted, the row is a
+  // native Solana campaign (bridge_status defaults to 'native' on the DB).
+  sourceChain?: CampaignRecord["source_chain"];
+  advertiserEvmAddress?: string | null;
+  bridgeStatus?: CampaignRecord["bridge_status"];
+  cctpNonce?: number | null;
+  sourceChainTxHash?: string | null;
+} = {} as never) {
   const payload: CampaignRecord = {
     id: crypto.randomUUID(),
     campaign_id_onchain: input.campaignIdOnchain,
@@ -741,6 +763,13 @@ export async function createCampaign(input: {
     active: true,
     chain: input.chain || process.env.NEXT_PUBLIC_VISTA_CHAIN || 'base-sepolia',
     created_at: nowIso(),
+    source_chain: input.sourceChain ?? "solana-devnet",
+    advertiser_evm_address: input.advertiserEvmAddress ?? null,
+    bridge_status: input.bridgeStatus ?? "native",
+    cctp_nonce: input.cctpNonce ?? null,
+    source_chain_tx_hash: input.sourceChainTxHash ?? null,
+    lz_message_hash: null,
+    bridged_at: null,
   };
   const supabase = createServerSupabaseClient();
 
@@ -759,6 +788,56 @@ export async function createCampaign(input: {
   }
 
   return normalizeCampaign(data as Record<string, unknown>);
+}
+
+export type BridgeStatusUpdate = Partial<
+  Pick<
+    CampaignRecord,
+    | "bridge_status"
+    | "cctp_nonce"
+    | "source_chain_tx_hash"
+    | "lz_message_hash"
+    | "bridged_at"
+    | "advertiser_evm_address"
+    | "source_chain"
+  >
+>;
+
+/// Update bridge-status fields on an existing campaign row keyed by the
+/// on-chain campaign id (the bytes32 from the EVM event). Returns the
+/// updated row, or null if no campaign with that id exists.
+export async function updateCampaignBridgeStatus(
+  campaignIdOnchain: string,
+  updates: BridgeStatusUpdate,
+) {
+  const supabase = createServerSupabaseClient();
+  if (!supabase) throw new Error("Supabase client is not configured");
+
+  const { data, error } = await supabase
+    .from("campaigns")
+    .update(updates)
+    .eq("campaign_id_onchain", campaignIdOnchain.toLowerCase())
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data ? normalizeCampaign(data as Record<string, unknown>) : null;
+}
+
+export async function getCampaignBridgeStatus(campaignIdOnchain: string) {
+  const supabase = createServerSupabaseClient();
+  if (!supabase) throw new Error("Supabase client is not configured");
+
+  const { data, error } = await supabase
+    .from("campaigns")
+    .select(
+      "campaign_id_onchain, source_chain, bridge_status, cctp_nonce, source_chain_tx_hash, lz_message_hash, bridged_at, advertiser_evm_address, advertiser_wallet, total_budget, created_at, active",
+    )
+    .eq("campaign_id_onchain", campaignIdOnchain.toLowerCase())
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data;
 }
 
 export async function listCampaignsByAdvertiser(wallet: string) {

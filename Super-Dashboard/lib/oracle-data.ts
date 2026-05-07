@@ -174,6 +174,42 @@ type SyncEvent =
         per_oracle_reward: number;
         settled_at: string;
       };
+    }
+  | {
+      event: "cross_chain_evm_confirmed";
+      payload: {
+        campaign_id_onchain: string;
+        source_chain: "base-sepolia" | "arbitrum-sepolia";
+        source_chain_tx_hash: string;
+        cctp_nonce: string;
+        advertiser_evm_address: string;
+        total_budget_raw: string;
+        observed_at: string;
+      };
+    }
+  | {
+      event: "cross_chain_attested";
+      payload: {
+        campaign_id_onchain: string;
+        cctp_nonce: string;
+        observed_at: string;
+      };
+    }
+  | {
+      event: "cross_chain_active";
+      payload: {
+        campaign_id_onchain: string;
+        confirm_tx?: string;
+        activated_at: string;
+      };
+    }
+  | {
+      event: "cross_chain_failed";
+      payload: {
+        campaign_id_onchain: string;
+        stage: string;
+        error: string;
+      };
     };
 
 export async function applyOracleSyncEvent(evt: SyncEvent) {
@@ -265,6 +301,44 @@ export async function applyOracleSyncEvent(evt: SyncEvent) {
         signals: evt.payload.signals ?? null,
         submitted_at: evt.payload.submitted_at,
       });
+      return;
+    }
+    case "cross_chain_evm_confirmed": {
+      await supabase
+        .from("campaigns")
+        .update({
+          bridge_status: "evm_confirmed",
+          source_chain: evt.payload.source_chain,
+          source_chain_tx_hash: evt.payload.source_chain_tx_hash,
+          cctp_nonce: Number(evt.payload.cctp_nonce),
+          advertiser_evm_address: evt.payload.advertiser_evm_address,
+        })
+        .eq("campaign_id_onchain", evt.payload.campaign_id_onchain.toLowerCase());
+      return;
+    }
+    case "cross_chain_attested": {
+      await supabase
+        .from("campaigns")
+        .update({ bridge_status: "cctp_attested" })
+        .eq("campaign_id_onchain", evt.payload.campaign_id_onchain.toLowerCase());
+      return;
+    }
+    case "cross_chain_active": {
+      await supabase
+        .from("campaigns")
+        .update({
+          bridge_status: "active",
+          bridged_at: evt.payload.activated_at,
+          active: true,
+        })
+        .eq("campaign_id_onchain", evt.payload.campaign_id_onchain.toLowerCase());
+      return;
+    }
+    case "cross_chain_failed": {
+      await supabase
+        .from("campaigns")
+        .update({ bridge_status: "failed" })
+        .eq("campaign_id_onchain", evt.payload.campaign_id_onchain.toLowerCase());
       return;
     }
     case "session_aggregated": {

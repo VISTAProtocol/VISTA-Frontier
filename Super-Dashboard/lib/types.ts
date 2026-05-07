@@ -42,6 +42,17 @@ export interface AdvertiserRecord {
   created_at: string
 }
 
+export type SourceChain = "solana-devnet" | "base-sepolia" | "arbitrum-sepolia"
+
+export type BridgeStatus =
+  | "native"
+  | "initiated"
+  | "evm_confirmed"
+  | "cctp_attested"
+  | "solana_minted"
+  | "active"
+  | "failed"
+
 export interface CampaignRecord {
   id: string
   campaign_id_onchain: string
@@ -59,6 +70,15 @@ export interface CampaignRecord {
   active: boolean
   chain: string
   created_at: string
+  // Cross-chain deposit fields. Optional for backward compatibility with
+  // existing native rows (DB defaults bridge_status='native', rest null).
+  source_chain?: SourceChain | null
+  advertiser_evm_address?: string | null
+  bridge_status?: BridgeStatus
+  cctp_nonce?: number | null
+  source_chain_tx_hash?: string | null
+  lz_message_hash?: string | null
+  bridged_at?: string | null
 }
 
 export interface SessionRecord {

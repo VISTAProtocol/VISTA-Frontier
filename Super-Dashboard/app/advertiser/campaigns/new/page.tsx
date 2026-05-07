@@ -5,8 +5,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { BN } from "@coral-xyz/anchor";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { useAccount, useReadContract, useSwitchChain, useWriteContract } from "wagmi";
+import { waitForTransactionReceipt } from "wagmi/actions";
+import { parseEventLogs, formatUnits } from "viem";
 
 import { MetricChartCard } from "@/components/metric-chart-card";
+import { BridgeStatusPanel } from "@/components/bridge-status-panel";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -32,8 +37,29 @@ import type { CampaignRecord, PreferenceOption } from "@/lib/types";
 import { buildExplorerUrl, bytes32FromSeed, cn, formatUsdc } from "@/lib/utils";
 import { useVistaProgram } from "@/lib/use-vista-program";
 import { depositCampaign, usdcToBn } from "@/lib/vista-actions";
+import { crossChainVaultPda } from "@/lib/solana";
+import {
+  EVM_CHAINS,
+  wagmiConfig,
+  type SupportedEvmChainKey,
+} from "@/lib/evm/config";
+import {
+  DEFAULT_LZ_OPTIONS,
+  VISTA_GATEWAY_ABI,
+} from "@/lib/evm/vista-gateway";
+import { USDC_ABI, usdcUnits } from "@/lib/evm/usdc";
+import { solanaPubkeyToBytes32 } from "@/lib/evm/solana-bytes";
 
 const VISTA_RATE = 0.000072; // USDC per viewer per second (fixed by VISTA Protocol)
+
+function bytes32ToHex(bytes: Uint8Array): string {
+  return (
+    "0x" +
+    Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
 
 const ALLOWED_MIME_TYPES = new Set([
   "image/jpeg",
@@ -167,11 +193,19 @@ const locationLabels = Object.fromEntries(
   locationOptions.map((l) => [l, l]),
 ) as Record<(typeof locationOptions)[number], string>;
 
+type DepositChain = "solana" | SupportedEvmChainKey;
+
 export default function NewCampaignPage() {
   const { publicKey } = useWallet();
   const address = publicKey?.toBase58() ?? null;
   const program = useVistaProgram();
 
+  // EVM wallet — only consulted when depositChain !== 'solana'.
+  const evm = useAccount();
+  const { switchChain } = useSwitchChain();
+  const { writeContractAsync } = useWriteContract();
+
+  const [depositChain, setDepositChain] = useState<DepositChain>("solana");
   const [title, setTitle] = useState("");
   const [landingUrl, setLandingUrl] = useState("");
   const [displayDuration, setDisplayDuration] = useState("30");
@@ -187,7 +221,32 @@ export default function NewCampaignPage() {
   const [launchResult, setLaunchResult] = useState<{
     txHash: string;
     campaign: CampaignRecord;
+    crossChain?: {
+      sourceChain: SupportedEvmChainKey;
+      campaignIdOnchain: string;
+      sourceTxHash: `0x${string}`;
+    };
   } | null>(null);
+
+  const evmChainMeta =
+    depositChain === "solana" ? null : EVM_CHAINS[depositChain];
+
+  // Live EVM USDC balance for the connected wallet on the selected chain.
+  const usdcBalanceQuery = useReadContract({
+    abi: USDC_ABI,
+    functionName: "balanceOf",
+    address: evmChainMeta?.usdc,
+    args: evm.address ? [evm.address] : undefined,
+    chainId: evmChainMeta?.chain.id,
+    query: {
+      enabled:
+        !!evmChainMeta && !!evm.address && evm.chainId === evmChainMeta.chain.id,
+      refetchInterval: 15_000,
+    },
+  });
+  const evmUsdcBalance = usdcBalanceQuery.data
+    ? formatUnits(usdcBalanceQuery.data as bigint, 6)
+    : null;
 
   const [isMinting, setIsMinting] = useState(false);
 
@@ -315,8 +374,8 @@ export default function NewCampaignPage() {
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!publicKey || !program) {
-      toast.error("Please connect your wallet first.");
+    if (!publicKey) {
+      toast.error("Please connect your Solana wallet first.");
       return;
     }
     if (!uploadResult) {
@@ -343,34 +402,106 @@ export default function NewCampaignPage() {
         throw new Error("Ad duration must be greater than zero.");
       }
 
-      // Derive a deterministic 32-byte campaign id from title + timestamp.
-      const campaignIdOnchain = await bytes32FromSeed(`${title}-${Date.now()}`);
+      if (depositChain === "solana") {
+        if (!program) throw new Error("Solana program client not ready.");
+        await launchSolanaCampaign(parsedBudget);
+      } else {
+        await launchCrossChainCampaign(parsedBudget, depositChain);
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        error instanceof Error ? error.message : "Unable to launch campaign.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
-      // On-chain deposit: locks USDC into a per-campaign vault PDA.
-      const totalBudgetBn = usdcToBn(parsedBudget);
-      const ratePerSecondBn = usdcToBn(VISTA_RATE);
-      const durationBn = new BN(duration);
+  async function launchSolanaCampaign(parsedBudget: number) {
+    if (!publicKey || !program || !uploadResult || duration == null) return;
 
-      const txSignature = await depositCampaign(program, {
-        campaignId: campaignIdOnchain,
-        advertiser: publicKey,
-        totalBudget: totalBudgetBn,
-        ratePerSecond: ratePerSecondBn,
-        duration: durationBn,
-      });
+    // Derive a deterministic 32-byte campaign id from title + timestamp.
+    const campaignIdOnchain = await bytes32FromSeed(`${title}-${Date.now()}`);
 
-      // Hex string for downstream APIs that still expect bytes32.
-      const campaignIdHex =
-        "0x" +
-        Array.from(campaignIdOnchain)
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("");
+    const totalBudgetBn = usdcToBn(parsedBudget);
+    const ratePerSecondBn = usdcToBn(VISTA_RATE);
+    const durationBn = new BN(duration);
 
-      const campaign = await fetchJson<CampaignRecord>("/api/campaigns", {
+    const txSignature = await depositCampaign(program, {
+      campaignId: campaignIdOnchain,
+      advertiser: publicKey,
+      totalBudget: totalBudgetBn,
+      ratePerSecond: ratePerSecondBn,
+      duration: durationBn,
+    });
+
+    const campaignIdHex = bytes32ToHex(campaignIdOnchain);
+    const campaign = await fetchJson<CampaignRecord>("/api/campaigns", {
+      method: "POST",
+      body: JSON.stringify({
+        campaignIdOnchain: campaignIdHex,
+        advertiserWallet: address,
+        title,
+        creativeUrl: uploadResult.publicUrl,
+        targetUrl: landingUrl,
+        totalBudget: parsedBudget,
+        ratePerSecond: VISTA_RATE,
+        targetPreferences: selectedPreferences,
+        targetMinAge: ageRange[0],
+        targetMaxAge: ageRange[1],
+        targetLocations: selectedLocations,
+      }),
+    });
+
+    setLaunchResult({ txHash: txSignature, campaign });
+    toast.success("Campaign launched on Solana devnet.");
+  }
+
+  async function launchCrossChainCampaign(
+    parsedBudget: number,
+    chainKey: SupportedEvmChainKey,
+  ) {
+    if (!publicKey || !uploadResult || duration == null) return;
+    const meta = EVM_CHAINS[chainKey];
+    if (!meta.vistaGateway) {
+      throw new Error(
+        `VistaGateway address not configured for ${meta.label}. Set NEXT_PUBLIC_VISTA_GATEWAY_${chainKey === "base-sepolia" ? "BASE" : "ARB"}_SEPOLIA in .env.`,
+      );
+    }
+    if (!evm.address) {
+      throw new Error("Connect your EVM wallet to deposit from this chain.");
+    }
+    if (evm.chainId !== meta.chain.id) {
+      switchChain({ chainId: meta.chain.id });
+      throw new Error(
+        `Switch your EVM wallet to ${meta.label} and submit again.`,
+      );
+    }
+
+    // 1. Derive campaign id. Mix in EVM nonce + sender to avoid the
+    //    timestamp-only collision risk flagged in the plan.
+    const campaignIdSeed = `${title}-${meta.chain.id}-${evm.address}-${Date.now()}`;
+    const campaignIdBytes = await bytes32FromSeed(campaignIdSeed);
+    const campaignIdHex = bytes32ToHex(campaignIdBytes);
+
+    // 2. Compute the per-campaign Solana vault PDA bytes32 — this is the
+    //    CCTP `mintRecipient`. MUST match what vista_bridge derives from
+    //    the same seeds, otherwise USDC lands at an unowned account.
+    const [vaultPda] = crossChainVaultPda(campaignIdBytes);
+    const solanaCampaignVault = solanaPubkeyToBytes32(vaultPda);
+
+    // 3. Persist Supabase row first (bridge_status='initiated') so the
+    //    record survives a tab close before MetaMask pops up.
+    const initialCampaign = await fetchJson<CampaignRecord>(
+      "/api/campaigns/cross-chain-initiated",
+      {
         method: "POST",
         body: JSON.stringify({
           campaignIdOnchain: campaignIdHex,
           advertiserWallet: address,
+          advertiserEvmAddress: evm.address,
+          sourceChain: chainKey,
           title,
           creativeUrl: uploadResult.publicUrl,
           targetUrl: landingUrl,
@@ -381,18 +512,94 @@ export default function NewCampaignPage() {
           targetMaxAge: ageRange[1],
           targetLocations: selectedLocations,
         }),
-      });
+      },
+    );
 
-      setLaunchResult({ txHash: txSignature, campaign });
-      toast.success("Campaign launched on Solana devnet.");
-    } catch (error) {
-      console.error(error);
-      toast.error(
-        error instanceof Error ? error.message : "Unable to launch campaign.",
-      );
-    } finally {
-      setIsSubmitting(false);
+    // 4. Approve USDC for the gateway. (forceApprove on the contract side
+    //    handles any non-zero existing allowance, so we always set exactly
+    //    the budget amount — simpler than a conditional check.)
+    const chainIdLiteral = meta.chain.id as 84532 | 421614;
+    const totalBudgetUnits = usdcUnits(parsedBudget);
+    toast.info(`Approve ${parsedBudget} USDC on ${meta.label}…`);
+    const approveTx = await writeContractAsync({
+      abi: USDC_ABI,
+      address: meta.usdc,
+      functionName: "approve",
+      args: [meta.vistaGateway, totalBudgetUnits],
+      chainId: chainIdLiteral,
+    });
+    await waitForTransactionReceipt(wagmiConfig, {
+      hash: approveTx,
+      chainId: chainIdLiteral,
+    });
+
+    // 5. Submit the deposit. NOTE: we don't call quoteLzFee here and just
+    //    pass a generous flat fee for the hackathon — if you want a real
+    //    quote, call gateway.quoteLzFee first and use its nativeFee value.
+    //    Passing too little reverts; too much is refunded by the endpoint.
+    const FLAT_LZ_FEE_WEI = BigInt("1000000000000000"); // 0.001 ETH
+    toast.info(`Submitting deposit on ${meta.label}…`);
+    const depositTx = await writeContractAsync({
+      abi: VISTA_GATEWAY_ABI,
+      address: meta.vistaGateway,
+      functionName: "depositCampaign",
+      args: [
+        campaignIdHex as `0x${string}`,
+        totalBudgetUnits,
+        BigInt(Math.round(VISTA_RATE * 1_000_000)),
+        BigInt(duration),
+        solanaCampaignVault,
+        DEFAULT_LZ_OPTIONS,
+      ],
+      chainId: chainIdLiteral,
+      value: FLAT_LZ_FEE_WEI,
+    });
+
+    const receipt = await waitForTransactionReceipt(wagmiConfig, {
+      hash: depositTx,
+      chainId: chainIdLiteral,
+    });
+
+    // 6. Pull the CCTP nonce out of the CampaignBridged event log so we
+    //    can show it in the UI immediately — oracle-node will overwrite
+    //    once it indexes the same event.
+    let cctpNonce: number | null = null;
+    try {
+      const events = parseEventLogs({
+        abi: VISTA_GATEWAY_ABI,
+        logs: receipt.logs,
+        eventName: "CampaignBridged",
+      });
+      const ev = events[0];
+      if (ev) {
+        cctpNonce = Number((ev.args as { cctpNonce: bigint }).cctpNonce);
+      }
+    } catch (err) {
+      console.warn("Could not parse CampaignBridged from receipt:", err);
     }
+
+    // 7. PATCH dashboard with tx hash + nonce.
+    await fetchJson("/api/campaigns/cross-chain-initiated", {
+      method: "PATCH",
+      body: JSON.stringify({
+        campaignIdOnchain: campaignIdHex,
+        sourceChainTxHash: depositTx,
+        cctpNonce,
+      }),
+    });
+
+    setLaunchResult({
+      txHash: depositTx,
+      campaign: initialCampaign,
+      crossChain: {
+        sourceChain: chainKey,
+        campaignIdOnchain: campaignIdHex,
+        sourceTxHash: depositTx,
+      },
+    });
+    toast.success(
+      `Deposit submitted on ${meta.label}. Bridge typically settles in 12–19 min.`,
+    );
   }
 
   return (
@@ -676,6 +883,83 @@ export default function NewCampaignPage() {
                   />
                 </div>
 
+                <div className="space-y-3 sm:col-span-2">
+                  <Label>Deposit chain</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(
+                      [
+                        { key: "solana", label: "Solana", sub: "Devnet" },
+                        {
+                          key: "base-sepolia",
+                          label: "Base",
+                          sub: "Sepolia · CCTP",
+                        },
+                        {
+                          key: "arbitrum-sepolia",
+                          label: "Arbitrum",
+                          sub: "Sepolia · CCTP",
+                        },
+                      ] as Array<{ key: DepositChain; label: string; sub: string }>
+                    ).map((opt) => (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setDepositChain(opt.key)}
+                        className={cn(
+                          "rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                          depositChain === opt.key
+                            ? "border-primary bg-primary/5"
+                            : "border-border hover:border-muted-foreground/50",
+                        )}
+                      >
+                        <div className="font-medium">{opt.label}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {opt.sub}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  {depositChain !== "solana" && (
+                    <div className="space-y-2 rounded-md border border-border/60 bg-muted/30 p-3 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">EVM wallet</span>
+                        <ConnectButton
+                          showBalance={false}
+                          chainStatus="icon"
+                          accountStatus={{ smallScreen: "avatar", largeScreen: "full" }}
+                        />
+                      </div>
+                      {evm.address && (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">USDC balance</span>
+                          <span className="font-mono">
+                            {evmUsdcBalance ?? "—"}
+                          </span>
+                        </div>
+                      )}
+                      {!evmChainMeta?.vistaGateway && (
+                        <p className="text-xs text-destructive">
+                          VistaGateway address not set in env. Deploy via
+                          <code className="ml-1">contracts/evm</code> and set
+                          <code className="ml-1">
+                            NEXT_PUBLIC_VISTA_GATEWAY_
+                            {depositChain === "base-sepolia"
+                              ? "BASE"
+                              : "ARB"}
+                            _SEPOLIA
+                          </code>
+                          .
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Funds bridge from {evmChainMeta?.label} to Solana via
+                        Circle CCTP + LayerZero. Solana settlement and user
+                        payouts happen exactly as for native deposits.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 <div className="space-y-2 sm:col-span-2">
                   <div className="flex items-center justify-between">
                     <Label>Total budget (USDC)</Label>
@@ -936,6 +1220,14 @@ export default function NewCampaignPage() {
               <p>5. Show transaction signature with Solana Explorer link.</p>
             </CardContent>
           </Card>
+
+          {launchResult?.crossChain ? (
+            <BridgeStatusPanel
+              campaignIdOnchain={launchResult.crossChain.campaignIdOnchain}
+              sourceChain={launchResult.crossChain.sourceChain}
+              initialTxHash={launchResult.crossChain.sourceTxHash}
+            />
+          ) : null}
 
           {launchResult ? (
             <Card className="border-primary/30 bg-primary/5">
