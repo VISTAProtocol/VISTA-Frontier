@@ -1,0 +1,9 @@
+{
+  "chain": "base-sepolia",
+  "chainId": 84532,
+  "vistaGateway": "0x362a3357414fb1f175d338cf02920de4d3a63884",
+  "deployer": "0xf9B3ad378176e2dd95b23466450FFDCAe042de49",
+  "cctpTokenMessenger": "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5",
+  "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "notes": "Trusted-relayer model — no LayerZero on EVM side. Oracle-node tails CampaignBridged event."
+}
