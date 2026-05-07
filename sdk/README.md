@@ -1,22 +1,16 @@
-# VISTA Protocol — Smart Contract & SDK
-
-This repository contains the core Solidity smart contracts and the JavaScript/TypeScript SDK for the VISTA Protocol on Base.
-
----
-
-## 📦 JavaScript/TypeScript SDK
+# VISTA Protocol — JavaScript/TypeScript SDK
 
 SDK for [VISTA Protocol](https://vista.xyz) — real-time attention monetization for Web3 platforms.
 
 Publishers install this SDK to collect browser attention signals and send heartbeats to the VISTA Oracle, enabling per-second USDC earnings for their users.
 
-### Install
+## Install
 
 ```bash
 npm install vista-protocol
 ```
 
-### Quick Start
+## Quick Start
 
 ```typescript
 import { Vista } from "vista-protocol";
@@ -49,7 +43,7 @@ Vista.onEarn((data) => {
 Vista.detachZone();
 ```
 
-### Onboarding Modal
+## Onboarding Modal
 
 VISTA provides a native onboarding modal to capture user profile data (age, location, preferences) without leaving your app.
 
@@ -60,59 +54,34 @@ Vista.showOnboardingModal({
 });
 ```
 
-### API Reference
+## API Reference
 
-#### `Vista.init(config: VistaConfig): void`
+### `Vista.init(config: VistaConfig): void`
 
 Initializes the SDK. Must be called before `attachZone()`.
 
-#### `Vista.attachZone(elementId: string): void`
+### `Vista.attachZone(elementId: string): void`
 
 Begins collecting signals for the given element.
 
-#### `Vista.showOnboardingModal(params: OnboardingParams): void`
+### `Vista.showOnboardingModal(params: OnboardingParams): void`
 
 Displays the profile registration modal.
 
-#### `Vista.detachZone(): void`
+### `Vista.detachZone(): void`
 
 Stops the heartbeat loop.
 
-#### `Vista.onEarn(callback: (data: EarnCallbackData) => void): void`
+### `Vista.onEarn(callback: (data: EarnCallbackData) => void): void`
 
 Registers a callback for attention ticks.
 
----
+## Build
 
-## 🛠 Smart Contracts (Foundry)
-
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
-
-### Usage
-
-#### Build
-
-```shell
-$ forge build
+```bash
+npm install
+npm run build
 ```
-
-#### Test
-
-```shell
-$ forge test
-```
-
-#### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Documentation
-
-https://book.getfoundry.sh/
-
----
 
 ## License
 
