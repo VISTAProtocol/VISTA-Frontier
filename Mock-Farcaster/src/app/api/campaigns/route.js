@@ -10,12 +10,14 @@ export async function GET(request) {
     process.env.NEXT_PUBLIC_VISTA_DASHBOARD_URL ?? "http://localhost:3031";
 
   try {
-    // Pass zero-address so the dashboard returns ALL active campaigns without
-    // applying user-targeting filters. Publisher-side apps should show every
-    // active ad — targeting is an advertiser preference for routing, not a
-    // hard gate for which viewers see the ad.
+    // Pass System Program (all-1s base58) as a placeholder so the dashboard
+    // returns ALL active campaigns without applying user-targeting filters.
+    // Publisher-side apps should show every active ad — targeting is an
+    // advertiser preference for routing, not a hard gate for which viewers
+    // see the ad.
+    const placeholderWallet = "11111111111111111111111111111111";
     const res = await fetch(
-      `${dashboardUrl}/api/campaigns/active?userWallet=0x0000000000000000000000000000000000000000`,
+      `${dashboardUrl}/api/campaigns/active?userWallet=${placeholderWallet}`,
       { cache: "no-store" },
     );
 
@@ -25,10 +27,10 @@ export async function GET(request) {
 
     const data = await res.json();
     const allCampaigns = Array.isArray(data) ? data : (data.campaigns ?? []);
-    
-    const currentChain = process.env.NEXT_PUBLIC_VISTA_CHAIN || "base-sepolia";
-    const campaigns = allCampaigns.filter(c => c.chain === currentChain);
-    
+
+    const currentChain = process.env.NEXT_PUBLIC_VISTA_CHAIN || "solana-devnet";
+    const campaigns = allCampaigns.filter((c) => c.chain === currentChain);
+
     return Response.json({ campaigns });
   } catch (err) {
     console.error("[API/campaigns] Failed to fetch campaigns:", err);

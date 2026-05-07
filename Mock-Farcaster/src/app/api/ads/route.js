@@ -22,8 +22,8 @@ export async function GET(request) {
     const data = await res.json();
     const allCampaigns = data.campaigns ?? [];
     
-    const currentChain = process.env.NEXT_PUBLIC_VISTA_CHAIN || "base-sepolia";
-    const campaigns = allCampaigns.filter(c => c.chain === currentChain);
+    const currentChain = process.env.NEXT_PUBLIC_VISTA_CHAIN || "solana-devnet";
+    const campaigns = allCampaigns.filter((c) => c.chain === currentChain);
 
     return Response.json({ campaigns });
   } catch {

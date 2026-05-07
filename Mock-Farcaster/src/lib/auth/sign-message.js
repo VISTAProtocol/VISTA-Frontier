@@ -3,15 +3,14 @@ export function buildWalletAuthMessage({
   uri,
   address,
   nonce,
-  chainId,
   issuedAt,
 }) {
   return [
-    "Sign in to Farcaster Base Sepolia App",
+    "Sign in to Farcaster Solana App",
     `Domain: ${domain}`,
     `URI: ${uri}`,
     `Address: ${address}`,
-    `Chain ID: ${chainId}`,
+    `Cluster: solana:devnet`,
     `Nonce: ${nonce}`,
     `Issued At: ${issuedAt}`,
     "Statement: This signature proves wallet ownership.",

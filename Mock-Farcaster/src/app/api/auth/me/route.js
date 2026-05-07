@@ -12,7 +12,6 @@ export async function GET() {
     authenticated: true,
     user: {
       address: session.address,
-      chainId: session.chainId,
     },
   });
 }

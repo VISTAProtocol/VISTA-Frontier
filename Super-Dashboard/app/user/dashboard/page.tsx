@@ -9,13 +9,9 @@ import {
   Wallet,
   ArrowDownToLine,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import {
-  useWriteContract,
-  useWaitForTransactionReceipt,
-  useReadContract,
-  formatEther,
-} from "@/lib/evm-shims";
+import { useCallback, useEffect, useState } from "react";
+import { PublicKey } from "@solana/web3.js";
+import { toast } from "sonner";
 
 import { LoadingScreen } from "@/components/loading-screen";
 import { PageHeader } from "@/components/page-header";
@@ -24,104 +20,40 @@ import { UsdcCounter } from "@/components/usdc-counter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { fetchJson } from "@/lib/http";
-import { contractAddresses, vistaVaultAbi } from "@/lib/contracts";
-import {
-  getBridgeFee,
-  normalizeBridgeOptions,
-  normalizeReceiverBytes32,
-} from "@/lib/bridge";
+import { USDC_DECIMALS } from "@/lib/solana";
 import type { UserDashboardData } from "@/lib/types";
+import { useVistaProgram } from "@/lib/use-vista-program";
 import { useVistaWallet } from "@/lib/use-vista-wallet";
+import { fetchUserBalance, withdraw } from "@/lib/vista-actions";
 import { formatDateTime, formatUsdc } from "@/lib/utils";
 
 export default function UserDashboardPage() {
   const { address } = useVistaWallet();
+  const program = useVistaProgram();
+
   const [data, setData] = useState<UserDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [withdrawAmount, setWithdrawAmount] = useState<number | null>(null);
-  const [bridgeReceiptId, setBridgeReceiptId] = useState<string>("");
-  const [bridgeDstEid, setBridgeDstEid] = useState<string>("");
-  const [bridgeReceiver, setBridgeReceiver] = useState<string>(
-    process.env.NEXT_PUBLIC_VISTA_BRIDGE_RECEIVER ?? "",
-  );
-  const [bridgeOptions, setBridgeOptions] = useState<string>("0x");
-  const [bridgeError, setBridgeError] = useState<string | null>(null);
 
-  const {
-    writeContract,
-    data: withdrawTxHash,
-    isPending: isWithdrawPending,
-    error: withdrawError,
-    reset: resetWithdraw,
-  } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess: isWithdrawn } =
-    useWaitForTransactionReceipt({ hash: withdrawTxHash });
+  // Vault balance in USDC base units (BigInt-safe), polled from chain.
+  const [vaultBalanceRaw, setVaultBalanceRaw] = useState<bigint>(BigInt(0));
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [lastWithdrawTx, setLastWithdrawTx] = useState<string | null>(null);
 
-  const {
-    writeContract: writeBridgeClaim,
-    data: bridgeTxHash,
-    isPending: isBridgePending,
-    error: bridgeTxError,
-    reset: resetBridge,
-  } = useWriteContract();
-  const { isLoading: isBridgeConfirming, isSuccess: isBridgeConfirmed } =
-    useWaitForTransactionReceipt({ hash: bridgeTxHash });
+  const refreshBalance = useCallback(async () => {
+    if (!program || !address) return;
+    try {
+      const bn = await fetchUserBalance(program, new PublicKey(address));
+      setVaultBalanceRaw(bn ? BigInt(bn.toString()) : BigInt(0));
+    } catch (err) {
+      console.warn("[user-dashboard] fetchUserBalance failed:", err);
+    }
+  }, [program, address]);
 
-  const { data: onChainBalance, refetch: refetchBalance } = useReadContract({
-    address: contractAddresses.vistaVault ?? undefined,
-    abi: vistaVaultAbi,
-    functionName: "getBalance",
-    args: address ? [address] : undefined,
-    query: { enabled: Boolean(address && contractAddresses.vistaVault) },
-  });
-
-  const receiverBytes32 = normalizeReceiverBytes32(bridgeReceiver);
-  const bridgeOptionsBytes = normalizeBridgeOptions(bridgeOptions);
-  let parsedReceiptId: bigint | null = null;
-  try {
-    parsedReceiptId = bridgeReceiptId ? BigInt(bridgeReceiptId) : null;
-  } catch {
-    parsedReceiptId = null;
-  }
-  const parsedDstEid = bridgeDstEid ? Number(bridgeDstEid) : null;
-  const dstEidValid =
-    parsedDstEid != null &&
-    Number.isInteger(parsedDstEid) &&
-    parsedDstEid >= 0 &&
-    parsedDstEid <= 0xffffffff;
-  const canQuoteBridge =
-    Boolean(
-      contractAddresses.vistaVault &&
-        address &&
-        parsedReceiptId != null &&
-        parsedDstEid != null &&
-        receiverBytes32,
-    ) &&
-    dstEidValid;
-
-  const { data: bridgeQuote } = useReadContract({
-    address: contractAddresses.vistaVault ?? undefined,
-    abi: vistaVaultAbi,
-    functionName: "quoteBridgeClaim",
-    args:
-      canQuoteBridge && receiverBytes32 && parsedReceiptId != null && parsedDstEid != null
-        ? [parsedReceiptId, parsedDstEid, receiverBytes32, bridgeOptionsBytes]
-        : undefined,
-    account: address ?? undefined,
-    query: { enabled: canQuoteBridge },
-  });
-
-  const resolvedQuote = getBridgeFee(bridgeQuote);
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
 
   useEffect(() => {
     if (!address) return;
@@ -150,10 +82,34 @@ export default function UserDashboardPage() {
     };
   }, [address]);
 
-  useEffect(() => {
-    if (isWithdrawn && withdrawAmount && data) {
-      // Update totalWithdrawn optimistically for better UX (convert from base units to USDC precisely)
-      const withdrawnUsdc = Number(BigInt(withdrawAmount) / BigInt(1_000_000));
+  async function handleWithdraw() {
+    if (!program || !address) return;
+    setWithdrawError(null);
+    setLastWithdrawTx(null);
+    setIsWithdrawing(true);
+
+    const amountAtoms = vaultBalanceRaw;
+
+    try {
+      const sig = await withdraw(program, new PublicKey(address));
+      setLastWithdrawTx(sig);
+
+      try {
+        await fetchJson("/api/vault/record-withdrawal", {
+          method: "POST",
+          body: JSON.stringify({
+            walletAddress: address,
+            amount: Number(amountAtoms) / 10 ** USDC_DECIMALS,
+            withdrawnAt: new Date().toISOString(),
+          }),
+        });
+      } catch (err) {
+        console.warn("[user-dashboard] record-withdrawal failed:", err);
+      }
+
+      // Optimistic local UI: bump totalWithdrawn so the stat card reflects
+      // immediately, even before the API reply round-trips.
+      const withdrawnUsdc = Number(amountAtoms) / 10 ** USDC_DECIMALS;
       setData((prev) =>
         prev
           ? {
@@ -165,75 +121,15 @@ export default function UserDashboardPage() {
             }
           : null,
       );
-      void refetchBalance();
+      toast.success("Withdrawal confirmed.");
+      await refreshBalance();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setWithdrawError(message);
+      toast.error(`Withdraw failed: ${message.split("\n")[0]}`);
+    } finally {
+      setIsWithdrawing(false);
     }
-  }, [isWithdrawn, withdrawAmount, data, refetchBalance]);
-
-  useEffect(() => {
-    if (!isWithdrawn || !withdrawAmount || !address) return;
-
-    let cancelled = false;
-
-    async function recordWithdrawal() {
-      try {
-        await fetchJson("/api/vault/record-withdrawal", {
-          method: "POST",
-          body: JSON.stringify({
-            walletAddress: address,
-            amount: withdrawAmount! / 1_000_000,
-            withdrawnAt: new Date().toISOString(),
-          }),
-        });
-        if (!cancelled) setWithdrawAmount(null);
-      } catch (err) {
-        console.error("Failed to record withdrawal:", err);
-      }
-    }
-
-    void recordWithdrawal();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isWithdrawn, withdrawAmount, address]);
-
-  function handleWithdraw() {
-    if (!contractAddresses.vistaVault) return;
-    const currentBalance = Number(onChainBalance ?? 0);
-    setWithdrawAmount(currentBalance);
-    resetWithdraw();
-    writeContract({
-      address: contractAddresses.vistaVault,
-      abi: vistaVaultAbi,
-      functionName: "withdraw",
-    });
-  }
-
-  function handleBridgeClaim() {
-    if (!contractAddresses.vistaVault) return;
-    if (!parsedReceiptId || parsedDstEid == null || !receiverBytes32) {
-      setBridgeError("Provide receipt token ID, destination EID, and receiver.");
-      return;
-    }
-    if (!resolvedQuote) {
-      setBridgeError("Quote unavailable. Check inputs and try again.");
-      return;
-    }
-
-    setBridgeError(null);
-    resetBridge();
-    writeBridgeClaim({
-      address: contractAddresses.vistaVault,
-      abi: vistaVaultAbi,
-      functionName: "requestBridgeClaim",
-      args: [
-        parsedReceiptId,
-        parsedDstEid,
-        receiverBytes32,
-        bridgeOptionsBytes,
-      ],
-      value: resolvedQuote.nativeFee,
-    });
   }
 
   if (error) {
@@ -246,10 +142,7 @@ export default function UserDashboardPage() {
     );
   }
 
-  // on-chain balance is in USDC base units (6 decimals)
-  const vaultBalanceRaw = Number(onChainBalance ?? 0);
-  const hasVaultBalance = vaultBalanceRaw > 0;
-  const isWithdrawing = isWithdrawPending || isConfirming;
+  const hasVaultBalance = vaultBalanceRaw > BigInt(0);
 
   return (
     <div className="space-y-6">
@@ -307,7 +200,7 @@ export default function UserDashboardPage() {
                 Vault balance
               </p>
               <p className="mt-1 text-3xl font-semibold tabular-nums">
-                {formatUsdc(vaultBalanceRaw / 1_000_000)}{" "}
+                {formatUsdc(Number(vaultBalanceRaw) / 10 ** USDC_DECIMALS)}{" "}
                 <span className="text-sm font-normal text-muted-foreground">
                   USDC
                 </span>
@@ -318,17 +211,13 @@ export default function UserDashboardPage() {
             <div className="flex flex-col items-end gap-2">
               <Button
                 onClick={handleWithdraw}
-                disabled={
-                  !hasVaultBalance ||
-                  isWithdrawing ||
-                  !contractAddresses.vistaVault
-                }
+                disabled={!hasVaultBalance || isWithdrawing || !program}
                 size="lg"
               >
                 {isWithdrawing ? (
                   <>
                     <ArrowDownToLine className="animate-pulse" />
-                    {isConfirming ? "Confirming…" : "Withdrawing…"}
+                    Withdrawing…
                   </>
                 ) : (
                   <>
@@ -337,142 +226,23 @@ export default function UserDashboardPage() {
                   </>
                 )}
               </Button>
-              {isWithdrawn && (
+              {lastWithdrawTx && (
                 <p className="text-xs text-green-600 dark:text-green-400">
                   Withdrawal confirmed!
                 </p>
               )}
               {withdrawError && (
                 <p className="max-w-xs text-right text-xs text-destructive">
-                  {withdrawError.message.split("\n")[0]}
+                  {withdrawError.split("\n")[0]}
                 </p>
               )}
-              {!hasVaultBalance && !isWithdrawn && (
+              {!hasVaultBalance && !lastWithdrawTx && (
                 <p className="text-xs text-muted-foreground">
                   No balance to withdraw
                 </p>
               )}
             </div>
           </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="space-y-6 p-6">
-          <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
-              Bridge your rewards
-            </p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Claim Vista tokens on another chain using your receipt NFT. You pay
-              the bridge fee.
-            </p>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="receiptTokenId">Receipt token ID</Label>
-              <Input
-                id="receiptTokenId"
-                placeholder="e.g. 12"
-                value={bridgeReceiptId}
-                onChange={(event) => setBridgeReceiptId(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="destinationChain">Destination chain</Label>
-              <Select
-                value={bridgeDstEid}
-                onValueChange={(value) => setBridgeDstEid(value ?? "")}
-              >
-                <SelectTrigger className="w-full" id="destinationChain">
-                  <SelectValue placeholder="Select chain" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">Custom / Unknown</SelectItem>
-                  {process.env.NEXT_PUBLIC_LZ_EID_BASE ? (
-                    <SelectItem value={process.env.NEXT_PUBLIC_LZ_EID_BASE}>
-                      Base
-                    </SelectItem>
-                  ) : null}
-                  {process.env.NEXT_PUBLIC_LZ_EID_ETH ? (
-                    <SelectItem value={process.env.NEXT_PUBLIC_LZ_EID_ETH}>
-                      Ethereum
-                    </SelectItem>
-                  ) : null}
-                  {process.env.NEXT_PUBLIC_LZ_EID_MONAD ? (
-                    <SelectItem value={process.env.NEXT_PUBLIC_LZ_EID_MONAD}>
-                      Monad
-                    </SelectItem>
-                  ) : null}
-                  {process.env.NEXT_PUBLIC_LZ_EID_SOLANA ? (
-                    <SelectItem value={process.env.NEXT_PUBLIC_LZ_EID_SOLANA}>
-                      Solana
-                    </SelectItem>
-                  ) : null}
-                </SelectContent>
-              </Select>
-              <Input
-                className="mt-2"
-                placeholder="Destination EID (uint32)"
-                value={bridgeDstEid}
-                onChange={(event) => setBridgeDstEid(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2 md:col-span-2">
-              <Label htmlFor="receiver">Bridge receiver (bytes32 or address)</Label>
-              <Input
-                id="receiver"
-                placeholder="0x..."
-                value={bridgeReceiver}
-                onChange={(event) => setBridgeReceiver(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2 md:col-span-2">
-              <Label htmlFor="options">LayerZero options (hex)</Label>
-              <Input
-                id="options"
-                placeholder="0x"
-                value={bridgeOptions}
-                onChange={(event) => setBridgeOptions(event.target.value)}
-              />
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-4 text-sm">
-            <div className="space-y-1 text-muted-foreground">
-              <p>
-                Estimated fee:{" "}
-                {resolvedQuote
-                  ? `${formatEther(resolvedQuote.nativeFee)} native`
-                  : "—"}
-              </p>
-              <p>
-                Receiver bytes32:{" "}
-                {receiverBytes32 ?? "Invalid receiver"}
-              </p>
-            </div>
-            <Button
-              onClick={handleBridgeClaim}
-              disabled={!canQuoteBridge || isBridgePending || isBridgeConfirming}
-              size="lg"
-            >
-              {isBridgePending || isBridgeConfirming
-                ? "Bridging..."
-                : "Bridge claim"}
-            </Button>
-          </div>
-          {bridgeError && (
-            <p className="text-xs text-destructive">{bridgeError}</p>
-          )}
-          {bridgeTxError && (
-            <p className="text-xs text-destructive">
-              {bridgeTxError.message.split("\n")[0]}
-            </p>
-          )}
-          {isBridgeConfirmed && (
-            <p className="text-xs text-green-600 dark:text-green-400">
-              Bridge request sent!
-            </p>
-          )}
         </CardContent>
       </Card>
 

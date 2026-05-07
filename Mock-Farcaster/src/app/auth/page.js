@@ -5,15 +5,17 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import bs58 from "bs58";
 import { Vista } from "@/lib/vista-sdk";
+import { buildWalletAuthMessage } from "@/lib/auth/sign-message";
 
 export default function AuthPage() {
   const router = useRouter();
-  const { publicKey, connected, disconnect, connecting } = useWallet();
+  const { publicKey, connected, disconnect, connecting, signMessage } = useWallet();
   const { setVisible } = useWalletModal();
 
   const [errorMessage, setErrorMessage] = useState("");
-  const [isCheckingUser, setIsCheckingUser] = useState(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   const address = publicKey?.toBase58() ?? null;
   const walletAddressLabel = useMemo(() => {
@@ -25,11 +27,56 @@ export default function AuthPage() {
     if (!connected || !address) return;
 
     let active = true;
-    setIsCheckingUser(true);
+    setIsAuthenticating(true);
     setErrorMessage("");
 
     (async () => {
       try {
+        // 1) SIWS sign-in: request nonce → wallet.signMessage → verify → cookie set
+        if (typeof signMessage !== "function") {
+          throw new Error("Wallet does not support message signing.");
+        }
+
+        const nonceRes = await fetch("/api/auth/nonce", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ address }),
+        });
+        const nonceData = await nonceRes.json();
+        if (!nonceRes.ok || !nonceData?.nonce) {
+          throw new Error(nonceData?.error || "Failed to obtain nonce.");
+        }
+
+        const issuedAt = new Date().toISOString();
+        const message = buildWalletAuthMessage({
+          domain: window.location.host,
+          uri: window.location.origin,
+          address,
+          nonce: nonceData.nonce,
+          issuedAt,
+        });
+
+        const signatureBytes = await signMessage(new TextEncoder().encode(message));
+        const signature = bs58.encode(signatureBytes);
+
+        const verifyRes = await fetch("/api/auth/verify", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            address,
+            message,
+            signature,
+            nonce: nonceData.nonce,
+          }),
+        });
+        const verifyData = await verifyRes.json();
+        if (!verifyRes.ok || !verifyData?.ok) {
+          throw new Error(verifyData?.error || "Signature verification failed.");
+        }
+
+        if (!active) return;
+
+        // 2) Onboarding gate: prompt registration if user record missing.
         const userCheck = await fetch(
           `/api/users?userWallet=${encodeURIComponent(address)}`,
         );
@@ -54,17 +101,17 @@ export default function AuthPage() {
         router.refresh();
       } catch (err) {
         if (!active) return;
-        console.error("Failed to check user registration:", err);
-        setErrorMessage("Gagal memeriksa status registrasi user.");
+        console.error("SIWS auth failed:", err);
+        setErrorMessage(err?.message || "Failed to sign in with Solana.");
       } finally {
-        if (active) setIsCheckingUser(false);
+        if (active) setIsAuthenticating(false);
       }
     })();
 
     return () => {
       active = false;
     };
-  }, [connected, address, router]);
+  }, [connected, address, router, signMessage]);
 
   return (
     <main className="min-h-screen bg-[#06070a] px-4 py-8 text-zinc-100">
@@ -99,7 +146,7 @@ export default function AuthPage() {
               </p>
               <p className="text-xs text-zinc-300">
                 Network: Solana Devnet
-                {isCheckingUser ? " · Checking registration…" : ""}
+                {isAuthenticating ? " · Signing in…" : ""}
               </p>
               <button
                 type="button"

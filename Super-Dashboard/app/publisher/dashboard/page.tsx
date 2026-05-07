@@ -23,15 +23,9 @@ import {
   Wallet2,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { PublicKey } from "@solana/web3.js";
 import { toast } from "sonner";
-import {
-  useReadContract,
-  useReadContracts,
-  useWaitForTransactionReceipt,
-  useWriteContract,
-} from "@/lib/evm-shims";
-import { useVistaWallet } from "@/lib/use-vista-wallet";
 
 import { LoadingScreen } from "@/components/loading-screen";
 import { MetricChartCard } from "@/components/metric-chart-card";
@@ -48,21 +42,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  contractAddresses,
-  vistaStreamAbi,
-  vistaVaultAbi,
-} from "@/lib/contracts";
 import { fetchJson } from "@/lib/http";
-import type { OnChainEarningRecord } from "@/lib/on-chain-helpers";
-import {
-  buildRecentSessions,
-  computePublisherStats,
-  computeRevenuePerDay,
-  computeSessionStats,
-  extractUniqueSessionIds,
-} from "@/lib/on-chain-helpers";
-import type { PublisherAnalyticsData, PublisherRecord } from "@/lib/types";
+import { USDC_DECIMALS } from "@/lib/solana";
+import type {
+  PublisherAnalyticsData,
+  PublisherDashboardData,
+  PublisherRecord,
+} from "@/lib/types";
+import { useVistaProgram } from "@/lib/use-vista-program";
+import { useVistaWallet } from "@/lib/use-vista-wallet";
+import { fetchUserBalance, withdraw } from "@/lib/vista-actions";
 import { formatUsdc, truncateAddress, truncateHash } from "@/lib/utils";
 
 // ─── Platform Card ─────────────────────────────────────────────────────────
@@ -215,7 +204,6 @@ vista.detachZone('your-ad-zone-element-id');`;
         <Badge className="self-start sm:self-auto px-3 py-1">Active</Badge>
       </div>
 
-      {/* Sub-tabs */}
       <div className="flex border-b border-border/50 overflow-x-auto">
         <button
           onClick={() => setDetailTab("integration")}
@@ -343,21 +331,31 @@ vista.detachZone('your-ad-zone-element-id');`;
 
 // ─── Analytics Tab ──────────────────────────────────────────────────────────
 
+interface AnalyticsTabProps {
+  dashboard: PublisherDashboardData;
+  totalWithdrawn: number;
+  vaultBalanceRaw: bigint;
+  isWithdrawing: boolean;
+  lastWithdrawTx: string | null;
+  withdrawError: string | null;
+  hasVaultBalance: boolean;
+  handleWithdraw: () => void;
+  canWithdraw: boolean;
+  address: string;
+}
+
 function AnalyticsTab({
-  onChainRevenuePerDay,
-  recentSessions,
+  dashboard,
   totalWithdrawn,
-  onChainStats,
-  sessionStats,
-  onChainBalance,
+  vaultBalanceRaw,
   isWithdrawing,
-  isWithdrawn,
+  lastWithdrawTx,
   withdrawError,
   hasVaultBalance,
   handleWithdraw,
-  isConfirming,
+  canWithdraw,
   address,
-}: any) {
+}: AnalyticsTabProps) {
   const [analyticsData, setAnalyticsData] =
     useState<PublisherAnalyticsData | null>(null);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
@@ -373,7 +371,6 @@ function AnalyticsTab({
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-      {/* On-chain overview stats */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           icon={Coins}
@@ -384,21 +381,20 @@ function AnalyticsTab({
         <StatCard
           icon={Eye}
           title="Total ad impressions"
-          value={onChainStats.totalAdImpressions}
+          value={dashboard.stats.totalAdImpressions}
         />
         <StatCard
           icon={TimerReset}
           title="Total viewer-seconds"
-          value={sessionStats.totalViewerSeconds}
+          value={dashboard.stats.totalViewerSeconds}
         />
         <StatCard
           icon={Activity}
           title="Active sessions now"
-          value={sessionStats.activeSessions}
+          value={dashboard.stats.activeSessions}
         />
       </div>
 
-      {/* Vault withdraw card */}
       <Card>
         <CardContent className="p-6">
           <div className="flex flex-wrap items-start justify-between gap-6">
@@ -408,7 +404,7 @@ function AnalyticsTab({
                   Vault balance
                 </p>
                 <p className="mt-1 text-3xl font-semibold tabular-nums">
-                  {formatUsdc(Number(onChainBalance ?? 0) / 1_000_000)}{" "}
+                  {formatUsdc(Number(vaultBalanceRaw) / 10 ** USDC_DECIMALS)}{" "}
                   <span className="text-sm font-normal text-muted-foreground">
                     USDC
                   </span>
@@ -421,17 +417,13 @@ function AnalyticsTab({
             <div className="flex flex-col items-end gap-2">
               <Button
                 onClick={handleWithdraw}
-                disabled={
-                  !hasVaultBalance ||
-                  isWithdrawing ||
-                  !contractAddresses.vistaVault
-                }
+                disabled={!hasVaultBalance || isWithdrawing || !canWithdraw}
                 size="lg"
               >
                 {isWithdrawing ? (
                   <>
                     <ArrowDownToLine className="animate-pulse" />
-                    {isConfirming ? "Confirming…" : "Withdrawing…"}
+                    Withdrawing…
                   </>
                 ) : (
                   <>
@@ -440,17 +432,17 @@ function AnalyticsTab({
                   </>
                 )}
               </Button>
-              {isWithdrawn && (
+              {lastWithdrawTx && (
                 <p className="text-xs text-green-600 dark:text-green-400">
                   Withdrawal confirmed!
                 </p>
               )}
               {withdrawError && (
                 <p className="max-w-xs text-right text-xs text-destructive">
-                  {withdrawError.message.split("\n")[0]}
+                  {withdrawError.split("\n")[0]}
                 </p>
               )}
-              {!hasVaultBalance && !isWithdrawn && (
+              {!hasVaultBalance && !lastWithdrawTx && (
                 <p className="text-xs text-muted-foreground">
                   No balance to withdraw
                 </p>
@@ -460,20 +452,17 @@ function AnalyticsTab({
         </CardContent>
       </Card>
 
-      {/* Revenue per day chart */}
       <MetricChartCard
-        data={onChainRevenuePerDay}
-        description="Daily publisher revenue from on-chain VistaVault earning records."
+        data={dashboard.revenuePerDay}
+        description="Daily publisher revenue from on-chain stream tick records."
         title="Revenue per day"
         valueFormatter={(value: number) => `${formatUsdc(value)} USDC`}
       />
 
-      {/* Deep analytics from DB */}
       {isLoadingAnalytics ? (
         <div className="h-40 rounded-2xl border border-border/40 bg-muted/20 animate-pulse" />
       ) : analyticsData ? (
         <>
-          {/* Deep stat cards */}
           <div className="grid gap-4 md:grid-cols-3">
             <StatCard
               icon={Wallet2}
@@ -492,7 +481,6 @@ function AnalyticsTab({
             />
           </div>
 
-          {/* Time slots + campaign breakdown */}
           <div className="grid gap-6 xl:grid-cols-2">
             <MetricChartCard
               data={analyticsData.topTimeSlots.map((slot) => ({
@@ -549,7 +537,6 @@ function AnalyticsTab({
         </>
       ) : null}
 
-      {/* Recent sessions */}
       <div className="rounded-[28px] border border-border/70 bg-card/90 p-4 sm:p-6">
         <div className="mb-4">
           <h2 className="text-xl font-semibold tracking-tight">
@@ -570,7 +557,7 @@ function AnalyticsTab({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {recentSessions.map((session: any) => (
+            {dashboard.recentSessions.map((session) => (
               <TableRow key={session.id}>
                 <TableCell className="font-medium">
                   {truncateHash(session.sessionIdOnchain)}
@@ -600,6 +587,7 @@ function AnalyticsTab({
 
 export default function PublisherDashboardPage() {
   const { address } = useVistaWallet();
+  const program = useVistaProgram();
   const [activeTab, setActiveTab] = useState<"dashboard" | "analytics">(
     "dashboard",
   );
@@ -608,17 +596,14 @@ export default function PublisherDashboardPage() {
   const [selectedPublisher, setSelectedPublisher] =
     useState<PublisherRecord | null>(null);
   const [totalWithdrawn, setTotalWithdrawn] = useState(0);
-  const withdrawalAmountRef = useRef(0);
 
-  const {
-    writeContract,
-    data: withdrawTxHash,
-    isPending: isWithdrawPending,
-    error: withdrawError,
-    reset: resetWithdraw,
-  } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess: isWithdrawn } =
-    useWaitForTransactionReceipt({ hash: withdrawTxHash });
+  const [dashboard, setDashboard] = useState<PublisherDashboardData | null>(null);
+  const [isLoadingDashboard, setIsLoadingDashboard] = useState(true);
+
+  const [vaultBalanceRaw, setVaultBalanceRaw] = useState<bigint>(BigInt(0));
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [lastWithdrawTx, setLastWithdrawTx] = useState<string | null>(null);
 
   // Fetch platforms
   useEffect(() => {
@@ -629,6 +614,16 @@ export default function PublisherDashboardPage() {
       .then((data) => setPublishers(Array.isArray(data) ? data : []))
       .catch(() => {})
       .finally(() => setIsLoadingPublishers(false));
+  }, [address]);
+
+  // Fetch on-chain dashboard rollup (Supabase-derived).
+  useEffect(() => {
+    if (!address) return;
+    setIsLoadingDashboard(true);
+    fetchJson<PublisherDashboardData>(`/api/dashboard/publisher?wallet=${address}`)
+      .then(setDashboard)
+      .catch(() => setDashboard(null))
+      .finally(() => setIsLoadingDashboard(false));
   }, [address]);
 
   const fetchTotalWithdrawn = useCallback(async () => {
@@ -644,118 +639,68 @@ export default function PublisherDashboardPage() {
     void fetchTotalWithdrawn();
   }, [fetchTotalWithdrawn]);
 
-  // ─── On-chain reads ────────────────────────────────────────────
-  const { data: onChainBalance, refetch: refetchBalance } = useReadContract({
-    address: contractAddresses.vistaVault ?? undefined,
-    abi: vistaVaultAbi,
-    functionName: "getBalance",
-    args: address ? [address] : undefined,
-    query: { enabled: Boolean(address && contractAddresses.vistaVault) },
-  });
-
-  const { data: earningRecords, isLoading: isLoadingRecords } = useReadContract(
-    {
-      address: contractAddresses.vistaVault ?? undefined,
-      abi: vistaVaultAbi,
-      functionName: "getEarningRecords",
-      args: address ? [address] : undefined,
-      query: { enabled: Boolean(address && contractAddresses.vistaVault) },
-    },
-  );
-
-  const sessionIds = useMemo(
-    () =>
-      extractUniqueSessionIds(
-        earningRecords as readonly OnChainEarningRecord[] | undefined,
-      ),
-    [earningRecords],
-  );
-
-  const sessionContracts = useMemo(
-    () =>
-      sessionIds.map((id) => ({
-        address: contractAddresses.vistaStream!,
-        abi: vistaStreamAbi,
-        functionName: "sessions" as const,
-        args: [id] as const,
-      })),
-    [sessionIds],
-  );
-
-  const { data: sessionResults, isLoading: isLoadingSessions } =
-    useReadContracts({
-      contracts: sessionContracts,
-      query: {
-        enabled:
-          sessionIds.length > 0 && Boolean(contractAddresses.vistaStream),
-      },
-    });
-
-  const typedEarningRecords = earningRecords as
-    | readonly OnChainEarningRecord[]
-    | undefined;
-
-  const onChainStats = useMemo(
-    () => computePublisherStats(typedEarningRecords),
-    [typedEarningRecords],
-  );
-  const onChainRevenuePerDay = useMemo(
-    () => computeRevenuePerDay(typedEarningRecords),
-    [typedEarningRecords],
-  );
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const typedSessionResults = sessionResults as any;
-  const sessionStats = useMemo(
-    () => computeSessionStats(typedSessionResults),
-    [typedSessionResults],
-  );
-  const recentSessions = useMemo(
-    () => buildRecentSessions(typedSessionResults, typedEarningRecords),
-    [typedSessionResults, typedEarningRecords],
-  );
-
-  // ─── Withdraw ──────────────────────────────────────────────────
-  useEffect(() => {
-    if (!isWithdrawn) return;
-    void refetchBalance();
-    if (address && withdrawalAmountRef.current > 0) {
-      void fetch("/api/publisher/withdrawal", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          walletAddress: address,
-          amount: withdrawalAmountRef.current,
-          withdrawnAt: new Date().toISOString(),
-        }),
-      }).then(() => void fetchTotalWithdrawn());
-      withdrawalAmountRef.current = 0;
+  const refreshBalance = useCallback(async () => {
+    if (!program || !address) return;
+    try {
+      const bn = await fetchUserBalance(program, new PublicKey(address));
+      setVaultBalanceRaw(bn ? BigInt(bn.toString()) : BigInt(0));
+    } catch (err) {
+      console.warn("[publisher-dashboard] fetchUserBalance failed:", err);
     }
-  }, [isWithdrawn, refetchBalance, address, fetchTotalWithdrawn]);
+  }, [program, address]);
 
-  function handleWithdraw() {
-    if (!contractAddresses.vistaVault) return;
-    withdrawalAmountRef.current = Number(onChainBalance ?? 0) / 1_000_000;
-    resetWithdraw();
-    writeContract({
-      address: contractAddresses.vistaVault,
-      abi: vistaVaultAbi,
-      functionName: "withdraw",
-    });
-  }
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
 
-  const isLoading =
-    isLoadingRecords || (sessionIds.length > 0 && isLoadingSessions);
+  const handleWithdraw = useCallback(async () => {
+    if (!program || !address) return;
+    setWithdrawError(null);
+    setLastWithdrawTx(null);
+    setIsWithdrawing(true);
 
-  if (isLoading) {
+    const amountAtoms = vaultBalanceRaw;
+
+    try {
+      const sig = await withdraw(program, new PublicKey(address));
+      setLastWithdrawTx(sig);
+
+      try {
+        await fetch("/api/publisher/withdrawal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            walletAddress: address,
+            amount: Number(amountAtoms) / 10 ** USDC_DECIMALS,
+            withdrawnAt: new Date().toISOString(),
+          }),
+        });
+        await fetchTotalWithdrawn();
+      } catch (err) {
+        console.warn("[publisher-dashboard] record-withdrawal failed:", err);
+      }
+
+      toast.success("Withdrawal confirmed.");
+      await refreshBalance();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setWithdrawError(message);
+      toast.error(`Withdraw failed: ${message.split("\n")[0]}`);
+    } finally {
+      setIsWithdrawing(false);
+    }
+  }, [program, address, vaultBalanceRaw, fetchTotalWithdrawn, refreshBalance]);
+
+  const hasVaultBalance = useMemo(
+    () => vaultBalanceRaw > BigInt(0),
+    [vaultBalanceRaw],
+  );
+
+  if (isLoadingDashboard || !dashboard) {
     return (
       <LoadingScreen description="Loading publisher revenue, active sessions, and daily trend lines." />
     );
   }
-
-  const vaultBalanceRaw = Number(onChainBalance ?? 0);
-  const hasVaultBalance = vaultBalanceRaw > 0;
-  const isWithdrawing = isWithdrawPending || isConfirming;
 
   return (
     <div className="space-y-6">
@@ -765,7 +710,6 @@ export default function PublisherDashboardPage() {
         description="Manage your registered platforms, track impressions, and withdraw USDC revenue."
       />
 
-      {/* Tabs */}
       <div className="flex border-b border-border/50 overflow-x-auto">
         <button
           onClick={() => { setActiveTab("dashboard"); setSelectedPublisher(null); }}
@@ -791,7 +735,6 @@ export default function PublisherDashboardPage() {
         </button>
       </div>
 
-      {/* ── Dashboard Tab ── */}
       {activeTab === "dashboard" && (
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
           {selectedPublisher ? (
@@ -859,21 +802,17 @@ export default function PublisherDashboardPage() {
         </div>
       )}
 
-      {/* ── Analytics Tab ── */}
-      {activeTab === "analytics" && (
+      {activeTab === "analytics" && address && (
         <AnalyticsTab
-          onChainRevenuePerDay={onChainRevenuePerDay}
-          recentSessions={recentSessions}
+          dashboard={dashboard}
           totalWithdrawn={totalWithdrawn}
-          onChainStats={onChainStats}
-          sessionStats={sessionStats}
-          onChainBalance={onChainBalance}
+          vaultBalanceRaw={vaultBalanceRaw}
           isWithdrawing={isWithdrawing}
-          isWithdrawn={isWithdrawn}
+          lastWithdrawTx={lastWithdrawTx}
           withdrawError={withdrawError}
           hasVaultBalance={hasVaultBalance}
           handleWithdraw={handleWithdraw}
-          isConfirming={isConfirming}
+          canWithdraw={Boolean(program)}
           address={address}
         />
       )}
