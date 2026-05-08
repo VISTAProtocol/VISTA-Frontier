@@ -274,6 +274,7 @@ name = "attention_aggregator"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "oracle_registry",
 ]
 
 [[package]]

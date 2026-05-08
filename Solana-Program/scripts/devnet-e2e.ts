@@ -568,6 +568,7 @@ async function main() {
         oracle: oracles[i].publicKey,
         config: aggCfg,
         oracleNode: oracleNodes[i],
+        registry: registryPda,
         attentionSession: aggSessionPda,
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,

@@ -3,6 +3,7 @@ use anchor_lang::solana_program::{
     instruction::{AccountMeta, Instruction},
     program::invoke_signed,
 };
+use oracle_registry::{OracleNode, Registry};
 
 declare_id!("6MJxBMfkocuzdbR5wJRvh31BAVPrUmk454yB9HnwvXtH");
 
@@ -287,65 +288,29 @@ pub mod attention_aggregator {
 
 // ─────────────────────── CPI helpers (manual invoke_signed) ───────────────────────
 
-/// Walk the OracleNode account layout to read fields without pulling
-/// oracle_registry as a Cargo dependency. Layout (after Anchor's 8-byte disc):
-/// [oracle: 32][endpoint_url_len: 4][endpoint_url][stake: u64][reward_balance: u64]
-/// [reputation: i64][total_submissions: u64][total_slashes: u64]
-/// [registered_at: i64][unregistered_at: i64][active: bool][bump: u8]
-fn oracle_node_stake_offset(data: &[u8]) -> Result<usize> {
-    require!(data.len() >= 8 + 32 + 4, AggregatorError::OracleNodeMalformed);
-    let endpoint_len = u32::from_le_bytes([data[40], data[41], data[42], data[43]]) as usize;
-    Ok(8 + 32 + 4 + endpoint_len)
-}
-
-fn read_u64_at(data: &[u8], offset: usize) -> Result<u64> {
-    require!(
-        data.len() >= offset + 8,
-        AggregatorError::OracleNodeMalformed
-    );
-    Ok(u64::from_le_bytes([
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        data[offset + 3],
-        data[offset + 4],
-        data[offset + 5],
-        data[offset + 6],
-        data[offset + 7],
-    ]))
+/// Deserialize OracleNode using oracle_registry's canonical types (via the
+/// `cpi` feature). This replaces previous byte-walking helpers that broke
+/// silently if the OracleNode struct grew new fields.
+fn deserialize_oracle_node(oracle_node_info: &AccountInfo) -> Result<OracleNode> {
+    let data = oracle_node_info.try_borrow_data()?;
+    OracleNode::try_deserialize(&mut &data[..])
+        .map_err(|_| error!(AggregatorError::OracleNodeMalformed))
 }
 
 fn read_oracle_stake(oracle_node_info: &AccountInfo) -> Result<u64> {
-    let data = oracle_node_info.try_borrow_data()?;
-    let stake_offset = oracle_node_stake_offset(&data)?;
-    read_u64_at(&data, stake_offset)
+    Ok(deserialize_oracle_node(oracle_node_info)?.stake)
 }
 
 fn read_oracle_node_stake_active(oracle_node_info: &AccountInfo) -> Result<(u64, bool)> {
-    let data = oracle_node_info.try_borrow_data()?;
-    let stake_offset = oracle_node_stake_offset(&data)?;
-    let stake = read_u64_at(&data, stake_offset)?;
-    // active flag sits 7 × 8 bytes after stake (reward_balance, reputation,
-    // total_submissions, total_slashes, registered_at, unregistered_at, then
-    // active as a single byte).
-    let active_offset = stake_offset + 8 * 7;
-    require!(
-        data.len() > active_offset,
-        AggregatorError::OracleNodeMalformed
-    );
-    let active = data[active_offset] != 0;
-    Ok((stake, active))
+    let node = deserialize_oracle_node(oracle_node_info)?;
+    Ok((node.stake, node.active))
 }
 
-/// Read `Registry.min_stake`. Layout (after 8-byte disc):
-/// [admin: 32][attention_aggregator: 32][min_stake: u64]...
 fn read_registry_min_stake(registry_info: &AccountInfo) -> Result<u64> {
     let data = registry_info.try_borrow_data()?;
-    require!(
-        data.len() >= 8 + 32 + 32 + 8,
-        AggregatorError::RegistryMalformed
-    );
-    read_u64_at(&data, 8 + 32 + 32)
+    let reg = Registry::try_deserialize(&mut &data[..])
+        .map_err(|_| error!(AggregatorError::RegistryMalformed))?;
+    Ok(reg.min_stake)
 }
 
 #[allow(clippy::too_many_arguments)]

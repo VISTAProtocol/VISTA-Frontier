@@ -6,10 +6,11 @@ import {
   WalletProvider,
 } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
-import {
-  PhantomWalletAdapter,
-  SolflareWalletAdapter,
-} from "@solana/wallet-adapter-wallets";
+// Import adapters directly (not via @solana/wallet-adapter-wallets bundle) so
+// we don't pull in the Trezor/Stellar/protobufjs vuln chain for adapters we
+// never use. See .superstack/security-audit.md → npm audit triage.
+import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
+import { SolflareWalletAdapter } from "@solana/wallet-adapter-solflare";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { WagmiProvider } from "wagmi";

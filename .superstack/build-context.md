@@ -67,14 +67,29 @@
 - Bridge `lz_executor_authority` (single trusted-relayer key) — README §Hackathon Trust Assumptions
 - `min_quorum >= 2` floor — same section, with mainnet recommendation 5–7
 
-## Remaining work (deferred)
+## Deferred-tasks round (2026-05-08, all 5 closed)
 
-- **`npm audit` triage** — 41 vulnerabilities in Super-Dashboard (mostly transitive walletconnect/trezor); 6 critical need manual review.
-- **`scripts/devnet-e2e.ts`** — full 3-program CPI happy-path script not yet exercised under Anchor 1.0 + Surfpool.
-- **`refund_stuck_validator_pool` test** — needs clock-warp test (Surfpool supports clock manipulation).
-- **Bridge tests** — `vista_bridge` has no test file; happy path + `confirm_usdc_received` balance gate not exercised.
-- **Shared types crate** (LO-1, LO-2 in security audit) — refactor byte-walking helpers to deserialize via Anchor types.
-- **Compiler `cfg(feature = "anchor-debug")` warnings** — harmless; silence by adding `anchor-debug = []` to each program's `[features]` table if desired.
+- ✅ **`scripts/devnet-e2e.ts`** — added `registry: registryPda` to `submitVerification` accountsPartial (required by HI-1 fix). Codemod from earlier round was already in place.
+- ✅ **`vista_bridge` tests** — new `tests/vista_bridge.ts`, 8 cases: initialize_bridge, lz_executor auth gate, happy-path receive, confirm_usdc_received balance gate (fail + success), start/tick/end cross-chain stream with 30/50/10/10 split assertion.
+- ✅ **`refund_stuck_validator_pool` test** — uses Surfpool's `surfnet_timeTravel` cheatcode (`absoluteTimestamp` in **milliseconds**) to warp 7 days forward. 3 cases: grace-period rejection, wrong-ATA rejection post-grace, permissionless refund happy path.
+- ✅ **Shared types refactor (LO-1)** — `attention_aggregator/Cargo.toml` now depends on `oracle_registry` with `features = ["cpi"]`. Byte-walking helpers replaced with `OracleNode::try_deserialize` + `Registry::try_deserialize`. `idl-build` propagated to `oracle_registry` so anchor-spl traits resolve. Test count unchanged.
+- ✅ **`npm audit` triage** — see `.superstack/npm-audit-triage.md`. **41 → 7 vulns** by switching from `@solana/wallet-adapter-wallets` bundle to direct `@solana/wallet-adapter-phantom` + `@solana/wallet-adapter-solflare` (kills entire Trezor → protobufjs chain). All 6 critical eliminated. Remaining 7 vulns are transitive + upstream-blocked + LOW practical risk; documented.
+
+## Test totals
+
+```
+attention_aggregator (smoke)        2/2
+oracle_registry                     7/7
+vista_bridge                        8/8
+vista_protocol + refund_stuck_…     6/6 + 3/3 = 9
+TOTAL                              26/26 passing under Surfpool
+```
+
+## Still open (not in any current task)
+
+- Compiler `cfg(feature = "anchor-debug")` warnings on every `#[program]`/`#[derive(Accounts)]` — harmless; add `anchor-debug = []` under `[features]` to silence.
+- `bigint-buffer 1.1.5` & `axios 1.13.6` vulns — no patched upstream version yet; revisit in 2 weeks.
+- Formal verification of conservation invariants — recommend `qedgen` for Phase 3 (see security-audit.md §Recommendations).
 
 ## Next phase
 

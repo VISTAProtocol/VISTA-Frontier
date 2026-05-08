@@ -14,7 +14,14 @@ no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
-idl-build = ["anchor-lang/idl-build"]
+# Propagate idl-build into oracle_registry so its #[derive(Accounts)] macro
+# expansion has the matching anchor-spl/idl-build trait impls available when
+# we build attention_aggregator's IDL.
+idl-build = ["anchor-lang/idl-build", "oracle_registry/idl-build"]
 
 [dependencies]
 anchor-lang = { workspace = true }
+# Pull oracle_registry's types (OracleNode, Registry) directly so we can
+# `try_deserialize` instead of walking raw byte offsets. The `cpi` feature
+# disables the program entrypoint to avoid duplicate-symbol linker errors.
+oracle_registry = { path = "../oracle_registry", features = ["cpi"] }

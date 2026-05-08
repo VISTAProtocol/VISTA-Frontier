@@ -394,4 +394,246 @@ describe("vista_protocol", () => {
     }
     expect(threw, "expected NothingToWithdraw revert").to.equal(true);
   });
+
+  // ── refund_stuck_validator_pool (uses Surfpool time-travel) ─────────────
+  describe("refund_stuck_validator_pool", () => {
+    const stuckCampaignId = crypto.randomBytes(32);
+    const stuckSessionId = crypto.randomBytes(32);
+    const [stuckCampaignPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("campaign"), stuckCampaignId],
+      program.programId,
+    );
+    const [stuckCampaignVaultAuth] = PublicKey.findProgramAddressSync(
+      [Buffer.from("campaign_vault_authority"), stuckCampaignId],
+      program.programId,
+    );
+    const [stuckCampaignVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("campaign_vault"), stuckCampaignId],
+      program.programId,
+    );
+    const [stuckSessionPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("session"), stuckSessionId],
+      program.programId,
+    );
+    const [stuckPoolAuthority] = PublicKey.findProgramAddressSync(
+      [Buffer.from("validator_pool_authority"), stuckSessionId],
+      program.programId,
+    );
+    const [stuckPoolVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("validator_pool"), stuckSessionId],
+      program.programId,
+    );
+
+    it("rejects refund while grace period is active", async () => {
+      // Set up a fresh campaign + session; tick once to put USDC into the
+      // validator pool. Aggregator never settles → pool is stranded.
+      await mintTo(
+        connection,
+        admin,
+        usdcMint,
+        advertiserAta,
+        admin,
+        2_000_000,
+      );
+      await program.methods
+        .depositCampaign(
+          Array.from(stuckCampaignId),
+          new BN(1_000_000), // 1 USDC budget
+          new BN(100_000), // 0.1 USDC/sec
+          new BN(60),
+        )
+        .accountsPartial({
+          advertiser: advertiser.publicKey,
+          config: configPda,
+          campaign: stuckCampaignPda,
+          campaignVaultAuthority: stuckCampaignVaultAuth,
+          campaignVault: stuckCampaignVault,
+          advertiserToken: advertiserAta,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([advertiser])
+        .rpc();
+
+      await program.methods
+        .startStream(Array.from(stuckSessionId), Array.from(stuckCampaignId))
+        .accountsPartial({
+          oracle: oracle.publicKey,
+          config: configPda,
+          campaign: stuckCampaignPda,
+          session: stuckSessionPda,
+          userWallet: userWallet.publicKey,
+          publisherWallet: publisherWallet.publicKey,
+          validatorPoolAuthority: stuckPoolAuthority,
+          validatorPoolVault: stuckPoolVault,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([oracle])
+        .rpc();
+
+      const [stuckUserBal] = PublicKey.findProgramAddressSync(
+        [Buffer.from("balance"), userWallet.publicKey.toBuffer()],
+        program.programId,
+      );
+      const [stuckPubBal] = PublicKey.findProgramAddressSync(
+        [Buffer.from("balance"), publisherWallet.publicKey.toBuffer()],
+        program.programId,
+      );
+
+      // 5 seconds × 100_000 = 500_000 atoms total. validator gets 50_000.
+      await program.methods
+        .tickStream(new BN(5))
+        .accountsPartial({
+          oracle: oracle.publicKey,
+          config: configPda,
+          session: stuckSessionPda,
+          campaign: stuckCampaignPda,
+          campaignVaultAuthority: stuckCampaignVaultAuth,
+          campaignVault: stuckCampaignVault,
+          userVault,
+          vaultAuthority,
+          vistaWalletToken: vistaWalletAta,
+          validatorPoolVault: stuckPoolVault,
+          userBalance: stuckUserBal,
+          publisherBalance: stuckPubBal,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([oracle])
+        .rpc();
+
+      const poolBefore = await getAccount(connection, stuckPoolVault);
+      expect(Number(poolBefore.amount)).to.equal(50_000);
+
+      // Try to refund immediately → should hit GracePeriodActive (7 days).
+      const caller = Keypair.generate();
+      const sig = await connection.requestAirdrop(
+        caller.publicKey,
+        LAMPORTS_PER_SOL / 10,
+      );
+      await connection.confirmTransaction(sig, "confirmed");
+
+      let threw = false;
+      try {
+        await program.methods
+          .refundStuckValidatorPool(Array.from(stuckSessionId))
+          .accountsPartial({
+            caller: caller.publicKey,
+            session: stuckSessionPda,
+            campaign: stuckCampaignPda,
+            validatorPoolVault: stuckPoolVault,
+            validatorPoolAuthority: stuckPoolAuthority,
+            advertiserToken: advertiserAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([caller])
+          .rpc();
+      } catch (e: any) {
+        threw = true;
+        expect(e.toString()).to.match(/GracePeriodActive|0x/i);
+      }
+      expect(threw, "expected GracePeriodActive while < 7 days").to.equal(true);
+    });
+
+    it("rejects refund to non-advertiser ATA even after grace expires", async () => {
+      // Warp past grace period using Surfpool's surfnet_timeTravel cheatcode.
+      // Note: Surfpool's absoluteTimestamp parameter is in MILLISECONDS.
+      const sevenDaysAheadMs = Date.now() + (7 * 24 * 60 * 60 + 60) * 1000;
+      const rpcUrl = (provider.connection as any)._rpcEndpoint;
+      const resp = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "surfnet_timeTravel",
+          params: [{ absoluteTimestamp: sevenDaysAheadMs }],
+        }),
+      });
+      const json = (await resp.json()) as { result?: unknown; error?: unknown };
+      if (json.error) {
+        throw new Error(
+          `surfnet_timeTravel failed (need Surfpool): ${JSON.stringify(json.error)}`,
+        );
+      }
+
+      // Caller passes a token account whose owner != campaign.advertiser.
+      const attacker = Keypair.generate();
+      const sig = await connection.requestAirdrop(
+        attacker.publicKey,
+        LAMPORTS_PER_SOL / 10,
+      );
+      await connection.confirmTransaction(sig, "confirmed");
+      const attackerAta = await createAssociatedTokenAccount(
+        connection,
+        admin,
+        usdcMint,
+        attacker.publicKey,
+      );
+
+      let threw = false;
+      let errStr = "";
+      try {
+        await program.methods
+          .refundStuckValidatorPool(Array.from(stuckSessionId))
+          .accountsPartial({
+            caller: attacker.publicKey,
+            session: stuckSessionPda,
+            campaign: stuckCampaignPda,
+            validatorPoolVault: stuckPoolVault,
+            validatorPoolAuthority: stuckPoolAuthority,
+            advertiserToken: attackerAta, // WRONG owner
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([attacker])
+          .rpc();
+      } catch (e: any) {
+        threw = true;
+        errStr = e.toString();
+      }
+      expect(threw, "expected NotAdvertiser revert").to.equal(true);
+      expect(errStr).to.match(/NotAdvertiser/);
+    });
+
+    it("permissionless refund returns stuck pool to advertiser after grace", async () => {
+      const advertiserBefore = await getAccount(connection, advertiserAta);
+      const poolBefore = await getAccount(connection, stuckPoolVault);
+      expect(Number(poolBefore.amount)).to.equal(50_000);
+
+      // Anyone can call — use a brand-new keypair as the permissionless caller.
+      const caller = Keypair.generate();
+      const sig = await connection.requestAirdrop(
+        caller.publicKey,
+        LAMPORTS_PER_SOL / 10,
+      );
+      await connection.confirmTransaction(sig, "confirmed");
+
+      await program.methods
+        .refundStuckValidatorPool(Array.from(stuckSessionId))
+        .accountsPartial({
+          caller: caller.publicKey,
+          session: stuckSessionPda,
+          campaign: stuckCampaignPda,
+          validatorPoolVault: stuckPoolVault,
+          validatorPoolAuthority: stuckPoolAuthority,
+          advertiserToken: advertiserAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([caller])
+        .rpc();
+
+      const advertiserAfter = await getAccount(connection, advertiserAta);
+      const poolAfter = await getAccount(connection, stuckPoolVault);
+      expect(Number(poolAfter.amount)).to.equal(0);
+      expect(
+        Number(advertiserAfter.amount) - Number(advertiserBefore.amount),
+      ).to.equal(50_000);
+    });
+  });
 });
