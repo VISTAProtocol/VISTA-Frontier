@@ -5,7 +5,7 @@ import {
   useAnchorWallet,
   useConnection,
 } from "@solana/wallet-adapter-react";
-import { Program } from "@coral-xyz/anchor";
+import { Program } from "@anchor-lang/core";
 
 import { getProvider, getVistaProgram } from "./anchor-client";
 import type { VistaProtocol } from "./anchor/vista_protocol";

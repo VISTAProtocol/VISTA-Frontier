@@ -1,4 +1,4 @@
-import { AnchorProvider, BN, Program, type Idl } from "@coral-xyz/anchor";
+import { AnchorProvider, BN, Program, type Idl } from "@anchor-lang/core";
 import {
   PublicKey,
   SystemProgram,

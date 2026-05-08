@@ -13,13 +13,13 @@ function parseList(
 
 export async function GET(
   request: Request,
-  { params }: { params: { wallet: string } }
+  { params }: { params: Promise<{ wallet: string }> }
 ) {
   try {
     const url = new URL(request.url)
     const chains = parseList(url.searchParams, "chain")
     const platforms = parseList(url.searchParams, "platform")
-    const wallet = normalizeWallet(params.wallet)
+    const wallet = normalizeWallet((await params).wallet)
 
     const result = await getAttentionScore(wallet, {
       chains: chains.length ? chains : undefined,

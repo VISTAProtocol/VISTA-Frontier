@@ -5,7 +5,7 @@ import {
   useAnchorWallet,
   useConnection,
 } from "@solana/wallet-adapter-react";
-import { Program } from "@coral-xyz/anchor";
+import { Program } from "@anchor-lang/core";
 
 import { getProvider } from "./anchor-client";
 import { getOracleRegistryProgram } from "./oracle-actions";

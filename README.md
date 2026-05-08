@@ -54,6 +54,19 @@ A functional demonstration of how the Vista SDK transforms a standard social med
 - **Solana Programs:** Anchor programs handling settlement, rewards minting, and cross-chain bridging via LayerZero V2.
 - **Vista SDK:** Browser library for attention tracking and heartbeat reporting.
 
+## 🔐 Hackathon Trust Assumptions
+
+This devnet build deliberately ships two reduced trust assumptions to keep the demo path simple. Both are flagged here so reviewers know what would change before mainnet:
+
+### 1. Cross-chain bridge: trusted-relayer mode
+`vista_bridge::receive_campaign_metadata` is gated by a single `lz_executor_authority` signer (the oracle-node admin key). For the hackathon this is intentional — it lets us exercise the campaign-bridge flow without spinning up a real LayerZero V2 endpoint. Production migration is one constraint change: swap `lz_executor_authority` for the canonical LayerZero V2 executor PDA derivation, and the rest of the receiver logic is unchanged. CCTP-side USDC delivery is already trustless (Circle's attestation + the per-campaign vault PDA address).
+
+### 2. Aggregator min_quorum & min_stake (deployment params)
+- `attention_aggregator::initialize` enforces `min_quorum >= 2` only.
+- `oracle_registry::DEFAULT_MIN_STAKE = 100 USDC`.
+
+These are fine for a devnet demo. **For mainnet:** raise `min_quorum` to a sybil-resistant floor (recommend **5–7**) and `min_stake` to a value where the cost of registering 16 sybil oracles exceeds the maximum extractable value per campaign. Deployment scripts should hard-code these.
+
 ## 🛠️ Repository Structure
 
 - `/Solana-Program`: Anchor programs (e.g. `vista_bridge`) for the Solana runtime.

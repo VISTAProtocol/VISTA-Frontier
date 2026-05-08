@@ -3,10 +3,10 @@ import { getPublisherByWallet } from "@/lib/data"
 
 export async function GET(
   _request: Request,
-  { params }: { params: { wallet: string } }
+  { params }: { params: Promise<{ wallet: string }> }
 ) {
   try {
-    const publisher = await getPublisherByWallet(params.wallet)
+    const publisher = await getPublisherByWallet((await params).wallet)
     if (!publisher) throw new ApiError("Publisher not found.", 404)
     return jsonOk(publisher)
   } catch (error) {

@@ -16,8 +16,8 @@
  * `scripts/.devnet-e2e-keypairs/` and re-run.
  */
 
-import * as anchor from "@coral-xyz/anchor";
-import { BN } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { BN } from "@anchor-lang/core";
 import {
   Connection,
   Keypair,

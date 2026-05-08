@@ -10,10 +10,10 @@ const patchSchema = z.object({
 
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const campaign = await getCampaignDetail(params.id)
+    const campaign = await getCampaignDetail((await params).id)
     if (!campaign) {
       throw new ApiError("Campaign not found.", 404)
     }
@@ -26,11 +26,11 @@ export async function GET(
 
 export async function PATCH(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const parsed = patchSchema.parse(await request.json())
-    const campaign = await updateCampaignById(params.id, parsed)
+    const campaign = await updateCampaignById((await params).id, parsed)
 
     if (!campaign) {
       throw new ApiError("Campaign not found.", 404)

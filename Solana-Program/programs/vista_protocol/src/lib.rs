@@ -21,6 +21,12 @@ const VALIDATOR_PCT: u64 = 10;
 #[constant]
 pub const ATTENTION_AGGREGATOR_ID: Pubkey = pubkey!("6MJxBMfkocuzdbR5wJRvh31BAVPrUmk454yB9HnwvXtH");
 
+// Grace period after `start_stream` before a stranded `validator_pool_vault`
+// can be refunded back to the campaign advertiser. 7 days gives the aggregator
+// ample time to reach quorum + settle. After that, anyone can call
+// `refund_stuck_validator_pool` to unstick the funds.
+pub const STUCK_POOL_GRACE_SECONDS: i64 = 7 * 24 * 60 * 60;
+
 #[program]
 pub mod vista_protocol {
     use super::*;
@@ -77,7 +83,7 @@ pub mod vista_protocol {
 
         token::transfer(
             CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.advertiser_token.to_account_info(),
                     to: ctx.accounts.campaign_vault.to_account_info(),
@@ -125,7 +131,7 @@ pub mod vista_protocol {
 
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.campaign_vault.to_account_info(),
                     to: ctx.accounts.advertiser_token.to_account_info(),
@@ -215,7 +221,7 @@ pub mod vista_protocol {
 
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.campaign_vault.to_account_info(),
                     to: ctx.accounts.user_vault.to_account_info(),
@@ -228,7 +234,7 @@ pub mod vista_protocol {
 
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.campaign_vault.to_account_info(),
                     to: ctx.accounts.validator_pool_vault.to_account_info(),
@@ -241,7 +247,7 @@ pub mod vista_protocol {
 
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.campaign_vault.to_account_info(),
                     to: ctx.accounts.vista_wallet_token.to_account_info(),
@@ -327,7 +333,7 @@ pub mod vista_protocol {
 
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.validator_pool_vault.to_account_info(),
                     to: ctx.accounts.reward_vault.to_account_info(),
@@ -344,6 +350,67 @@ pub mod vista_protocol {
             reward_vault: ctx.accounts.reward_vault.key(),
         });
         Ok(amount)
+    }
+
+    /// Permissionless escape hatch: if a session never reaches aggregator
+    /// settlement (quorum miss, no permissionless caller of `aggregate_results`,
+    /// etc.), the validator pool USDC would otherwise be stranded forever.
+    /// After STUCK_POOL_GRACE_SECONDS since `start_stream`, anyone can call this
+    /// to refund the pool balance back to the campaign advertiser's USDC ATA.
+    pub fn refund_stuck_validator_pool(
+        ctx: Context<RefundStuckValidatorPool>,
+        session_id: [u8; 32],
+    ) -> Result<()> {
+        let session = &ctx.accounts.session;
+        require!(
+            session.session_id == session_id,
+            VistaError::CampaignMismatch
+        );
+
+        let campaign = &ctx.accounts.campaign;
+        require!(
+            campaign.campaign_id == session.campaign_id,
+            VistaError::CampaignMismatch
+        );
+
+        let now = Clock::get()?.unix_timestamp;
+        require!(
+            now >= session.started_at + STUCK_POOL_GRACE_SECONDS,
+            VistaError::GracePeriodActive
+        );
+
+        require!(
+            ctx.accounts.advertiser_token.owner == campaign.advertiser,
+            VistaError::NotAdvertiser
+        );
+
+        let amount = ctx.accounts.validator_pool_vault.amount;
+        require!(amount > 0, VistaError::EmptyPool);
+
+        let bump = ctx.bumps.validator_pool_authority;
+        let seeds: &[&[u8]] = &[b"validator_pool_authority", session_id.as_ref(), &[bump]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                Transfer {
+                    from: ctx.accounts.validator_pool_vault.to_account_info(),
+                    to: ctx.accounts.advertiser_token.to_account_info(),
+                    authority: ctx.accounts.validator_pool_authority.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )?;
+
+        emit!(StuckValidatorPoolRefunded {
+            session_id,
+            campaign_id: campaign.campaign_id,
+            advertiser: campaign.advertiser,
+            amount,
+            timestamp: now,
+        });
+        Ok(())
     }
 
     /// Closes the session and mints a soulbound receipt PDA to the viewer.
@@ -404,7 +471,7 @@ pub mod vista_protocol {
 
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.user_vault.to_account_info(),
                     to: ctx.accounts.beneficiary_token.to_account_info(),
@@ -719,6 +786,46 @@ pub struct DrainValidatorPool<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(session_id: [u8; 32])]
+pub struct RefundStuckValidatorPool<'info> {
+    /// Permissionless: anyone can pay the tx + claim the rent recapture if any.
+    pub caller: Signer<'info>,
+
+    #[account(
+        seeds = [b"session", session_id.as_ref()],
+        bump = session.bump,
+    )]
+    pub session: Account<'info, Session>,
+
+    #[account(
+        seeds = [b"campaign", campaign.campaign_id.as_ref()],
+        bump = campaign.bump,
+    )]
+    pub campaign: Account<'info, Campaign>,
+
+    #[account(
+        mut,
+        seeds = [b"validator_pool", session_id.as_ref()],
+        bump,
+    )]
+    pub validator_pool_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: PDA owning validator_pool_vault.
+    #[account(
+        seeds = [b"validator_pool_authority", session_id.as_ref()],
+        bump,
+    )]
+    pub validator_pool_authority: UncheckedAccount<'info>,
+
+    /// CHECK: advertiser's USDC ATA. Verified inside the handler that
+    /// `owner == campaign.advertiser` so attacker can't pass their own ATA.
+    #[account(mut, token::mint = validator_pool_vault.mint)]
+    pub advertiser_token: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
 pub struct EndStream<'info> {
     #[account(mut)]
     pub oracle: Signer<'info>,
@@ -966,6 +1073,15 @@ pub struct ValidatorPoolDrained {
     pub reward_vault: Pubkey,
 }
 
+#[event]
+pub struct StuckValidatorPoolRefunded {
+    pub session_id: [u8; 32],
+    pub campaign_id: [u8; 32],
+    pub advertiser: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
 // ─────────────────────────────── Errors ───────────────────────────────
 
 #[error_code]
@@ -1008,6 +1124,8 @@ pub enum VistaError {
     NotAggregator,
     #[msg("Validator pool is empty — nothing to drain")]
     EmptyPool,
+    #[msg("Grace period for stuck-pool refund is still active")]
+    GracePeriodActive,
     #[msg("Arithmetic overflow")]
     Overflow,
 }

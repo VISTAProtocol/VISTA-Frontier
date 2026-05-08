@@ -1,5 +1,5 @@
-import * as anchor from "@coral-xyz/anchor";
-import { Program, BN } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { Program, BN } from "@anchor-lang/core";
 import { AttentionAggregator } from "../target/types/attention_aggregator";
 import {
   PublicKey,
@@ -55,9 +55,12 @@ describe("attention_aggregator (smoke)", () => {
     expect(cfg.oracleRegistry.toString()).to.equal(fakeRegistry.toString());
   });
 
-  it("submit_verification — rejects when oracle_node owner != registry", async () => {
-    // We don't have a real oracle_registry deployed in this test, so we
-    // verify the WrongRegistry guard fires when we pass an arbitrary account.
+  it("submit_verification — rejects when oracle_node + registry are bogus", async () => {
+    // We don't have a real oracle_registry deployed in this test, so any
+    // arbitrary account passed for oracle_node + registry MUST be rejected by
+    // one of: seeds::program binding mismatch, owner constraint, or missing
+    // accounts. The point: a signer cannot get a verification accepted without
+    // a properly-derived OracleNode + Registry under config.oracle_registry.
     const oracle = Keypair.generate();
     const sig = await connection.requestAirdrop(
       oracle.publicKey,
@@ -78,7 +81,8 @@ describe("attention_aggregator (smoke)", () => {
         .accountsPartial({
           oracle: oracle.publicKey,
           config: configPda,
-          oracleNode: oracle.publicKey, // wrong owner — system, not fakeRegistry
+          oracleNode: oracle.publicKey, // bogus
+          registry: fakeRegistry, // bogus
           attentionSession: sessionPda,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
@@ -87,7 +91,10 @@ describe("attention_aggregator (smoke)", () => {
         .rpc();
     } catch (e: any) {
       threw = true;
-      expect(e.toString()).to.match(/WrongRegistry|0x.+/);
+      // Accept any of the rejection paths — all are correct safety guards.
+      expect(e.toString()).to.match(
+        /WrongRegistry|registry|seeds|ConstraintSeeds|0x/i,
+      );
     }
     expect(threw).to.equal(true);
   });

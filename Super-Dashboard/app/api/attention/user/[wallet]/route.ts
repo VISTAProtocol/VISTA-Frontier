@@ -13,11 +13,11 @@ function parseList(
 
 export async function GET(
   request: Request,
-  { params }: { params: { wallet: string } }
+  { params }: { params: Promise<{ wallet: string }> }
 ) {
   try {
     const callerWallet = normalizeWallet(await assertJwt(request))
-    const wallet = normalizeWallet(params.wallet)
+    const wallet = normalizeWallet((await params).wallet)
 
     if (callerWallet !== wallet) {
       throw new ApiError("Forbidden.", 403)

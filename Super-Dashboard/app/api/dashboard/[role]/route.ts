@@ -14,10 +14,10 @@ const querySchema = z.object({
 
 export async function GET(
   request: Request,
-  { params }: { params: { role: string } }
+  { params }: { params: Promise<{ role: string }> }
 ) {
   try {
-    const role = params.role as RoleName
+    const role = (await params).role as RoleName
     const { searchParams } = new URL(request.url)
     const parsed = querySchema.parse({
       wallet: searchParams.get("wallet"),

@@ -3,11 +3,11 @@ import { getUserEarnings } from "@/lib/data"
 
 export async function GET(
   request: Request,
-  { params }: { params: { wallet: string } }
+  { params }: { params: Promise<{ wallet: string }> }
 ) {
   try {
     const callerWallet = await assertJwt(request)
-    const wallet = params.wallet.toLowerCase()
+    const wallet = (await params).wallet.toLowerCase()
 
     if (callerWallet !== wallet) {
       throw new ApiError("Forbidden.", 403)

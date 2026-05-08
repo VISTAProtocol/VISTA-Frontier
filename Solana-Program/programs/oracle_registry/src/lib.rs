@@ -58,7 +58,7 @@ pub mod oracle_registry {
 
         token::transfer(
             CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.oracle_token.to_account_info(),
                     to: ctx.accounts.stake_vault.to_account_info(),
@@ -133,7 +133,7 @@ pub mod oracle_registry {
 
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.stake_vault.to_account_info(),
                     to: ctx.accounts.oracle_token.to_account_info(),
@@ -234,7 +234,7 @@ pub mod oracle_registry {
 
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.reward_vault.to_account_info(),
                     to: ctx.accounts.oracle_token.to_account_info(),

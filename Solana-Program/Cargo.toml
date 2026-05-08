@@ -2,6 +2,10 @@
 members = ["programs/*"]
 resolver = "2"
 
+[workspace.dependencies]
+anchor-lang = { version = "1.0.2", features = ["init-if-needed"] }
+anchor-spl = "1.0.2"
+
 [profile.release]
 overflow-checks = true
 lto = "fat"

@@ -3,11 +3,11 @@ import { getReceiptsByCampaign } from "@/lib/data"
 
 export async function GET(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const callerWallet = await assertJwt(request)
-    const { receipts, advertiserWallet } = await getReceiptsByCampaign(params.id)
+    const { receipts, advertiserWallet } = await getReceiptsByCampaign((await params).id)
 
     if (!advertiserWallet) {
       throw new ApiError("Campaign not found.", 404)

@@ -226,7 +226,7 @@ pub mod vista_bridge {
         // user → user_token (their ATA)
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.xchain_vault.to_account_info(),
                     to: ctx.accounts.user_token.to_account_info(),
@@ -240,7 +240,7 @@ pub mod vista_bridge {
         // publisher → publisher_token (their ATA)
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.xchain_vault.to_account_info(),
                     to: ctx.accounts.publisher_token.to_account_info(),
@@ -254,7 +254,7 @@ pub mod vista_bridge {
         // validator pool (oracle_registry drains this asynchronously)
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.xchain_vault.to_account_info(),
                     to: ctx.accounts.validator_pool.to_account_info(),
@@ -268,7 +268,7 @@ pub mod vista_bridge {
         // vista fee
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.xchain_vault.to_account_info(),
                     to: ctx.accounts.vista_wallet_token.to_account_info(),
@@ -361,7 +361,7 @@ pub mod vista_bridge {
 
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.xchain_vault.to_account_info(),
                     to: ctx.accounts.recipient_token.to_account_info(),

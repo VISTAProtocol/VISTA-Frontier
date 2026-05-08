@@ -3,10 +3,10 @@ import { getUser } from "@/lib/data"
 
 export async function GET(
   _request: Request,
-  { params }: { params: { wallet: string } }
+  { params }: { params: Promise<{ wallet: string }> }
 ) {
   try {
-    const user = await getUser(params.wallet)
+    const user = await getUser((await params).wallet)
 
     if (!user) {
       throw new ApiError("User not found.", 404)

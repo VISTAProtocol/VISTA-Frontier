@@ -48,6 +48,15 @@ pub mod attention_aggregator {
     ) -> Result<()> {
         require!(score <= 100, AggregatorError::InvalidScore);
 
+        // Defense-in-depth: verify the OracleNode is currently active and meets
+        // min_stake. The seeds::program constraint on `oracle_node` already binds
+        // the account to this signer's pubkey via the canonical PDA derivation,
+        // so reading `active`/`stake` here is reading *this* signer's record.
+        let (stake, active) = read_oracle_node_stake_active(&ctx.accounts.oracle_node)?;
+        require!(active, AggregatorError::OracleNotActive);
+        let min_stake = read_registry_min_stake(&ctx.accounts.registry)?;
+        require!(stake >= min_stake, AggregatorError::InsufficientStake);
+
         let now = Clock::get()?.unix_timestamp;
         let cfg = &ctx.accounts.config;
         let session = &mut ctx.accounts.attention_session;
@@ -112,7 +121,7 @@ pub mod attention_aggregator {
     ///   [oracle_node_0, oracle_node_1, ...] in the SAME ORDER as
     ///   `attention_session.submissions[0..submissions_count]`.
     pub fn aggregate_results<'info>(
-        ctx: Context<'_, '_, 'info, 'info, AggregateResults<'info>>,
+        ctx: Context<'info, AggregateResults<'info>>,
         session_id: [u8; 32],
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
@@ -137,6 +146,22 @@ pub mod attention_aggregator {
             ctx.remaining_accounts.len() == count,
             AggregatorError::RemainingAccountsMismatch
         );
+
+        // SECURITY (C1): bind each remaining_accounts[i] to submissions[i].oracle.
+        // Without this check, a permissionless caller of aggregate_results could
+        // pass arbitrary OracleNode PDAs and route slashing/credit to the wrong
+        // oracles (slash innocents, credit attacker's nodes).
+        for i in 0..count {
+            let (expected, _bump) = Pubkey::find_program_address(
+                &[b"oracle_node", session.submissions[i].oracle.as_ref()],
+                &cfg.oracle_registry,
+            );
+            require_keys_eq!(
+                ctx.remaining_accounts[i].key(),
+                expected,
+                AggregatorError::OracleNodeBindingMismatch
+            );
+        }
 
         // Compute mean of all submitted scores.
         let mut sum: u32 = 0;
@@ -262,30 +287,65 @@ pub mod attention_aggregator {
 
 // ─────────────────────── CPI helpers (manual invoke_signed) ───────────────────────
 
-/// Read `OracleNode.stake` (offset 8 + 32 + 4 + endpoint_len bytes from start
-/// of account data). Since `endpoint_url` is variable length we walk the
-/// account layout: [discriminator: 8][oracle: 32][endpoint_url_len: 4]
-/// [endpoint_url bytes][stake: u64]...
-fn read_oracle_stake(oracle_node_info: &AccountInfo) -> Result<u64> {
-    let data = oracle_node_info.try_borrow_data()?;
+/// Walk the OracleNode account layout to read fields without pulling
+/// oracle_registry as a Cargo dependency. Layout (after Anchor's 8-byte disc):
+/// [oracle: 32][endpoint_url_len: 4][endpoint_url][stake: u64][reward_balance: u64]
+/// [reputation: i64][total_submissions: u64][total_slashes: u64]
+/// [registered_at: i64][unregistered_at: i64][active: bool][bump: u8]
+fn oracle_node_stake_offset(data: &[u8]) -> Result<usize> {
     require!(data.len() >= 8 + 32 + 4, AggregatorError::OracleNodeMalformed);
     let endpoint_len = u32::from_le_bytes([data[40], data[41], data[42], data[43]]) as usize;
-    let stake_offset = 8 + 32 + 4 + endpoint_len;
+    Ok(8 + 32 + 4 + endpoint_len)
+}
+
+fn read_u64_at(data: &[u8], offset: usize) -> Result<u64> {
     require!(
-        data.len() >= stake_offset + 8,
+        data.len() >= offset + 8,
         AggregatorError::OracleNodeMalformed
     );
-    let stake = u64::from_le_bytes([
-        data[stake_offset],
-        data[stake_offset + 1],
-        data[stake_offset + 2],
-        data[stake_offset + 3],
-        data[stake_offset + 4],
-        data[stake_offset + 5],
-        data[stake_offset + 6],
-        data[stake_offset + 7],
-    ]);
-    Ok(stake)
+    Ok(u64::from_le_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+        data[offset + 4],
+        data[offset + 5],
+        data[offset + 6],
+        data[offset + 7],
+    ]))
+}
+
+fn read_oracle_stake(oracle_node_info: &AccountInfo) -> Result<u64> {
+    let data = oracle_node_info.try_borrow_data()?;
+    let stake_offset = oracle_node_stake_offset(&data)?;
+    read_u64_at(&data, stake_offset)
+}
+
+fn read_oracle_node_stake_active(oracle_node_info: &AccountInfo) -> Result<(u64, bool)> {
+    let data = oracle_node_info.try_borrow_data()?;
+    let stake_offset = oracle_node_stake_offset(&data)?;
+    let stake = read_u64_at(&data, stake_offset)?;
+    // active flag sits 7 × 8 bytes after stake (reward_balance, reputation,
+    // total_submissions, total_slashes, registered_at, unregistered_at, then
+    // active as a single byte).
+    let active_offset = stake_offset + 8 * 7;
+    require!(
+        data.len() > active_offset,
+        AggregatorError::OracleNodeMalformed
+    );
+    let active = data[active_offset] != 0;
+    Ok((stake, active))
+}
+
+/// Read `Registry.min_stake`. Layout (after 8-byte disc):
+/// [admin: 32][attention_aggregator: 32][min_stake: u64]...
+fn read_registry_min_stake(registry_info: &AccountInfo) -> Result<u64> {
+    let data = registry_info.try_borrow_data()?;
+    require!(
+        data.len() >= 8 + 32 + 32 + 8,
+        AggregatorError::RegistryMalformed
+    );
+    read_u64_at(&data, 8 + 32 + 32)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -452,12 +512,27 @@ pub struct SubmitVerification<'info> {
     #[account(seeds = [b"aggregator_config"], bump = config.bump)]
     pub config: Account<'info, AggregatorConfig>,
 
-    /// CHECK: oracle's OracleNode PDA in oracle_registry. Validated by checking
-    /// owner == config.oracle_registry and that the data shows active=true.
+    /// CHECK: signer's OracleNode PDA in oracle_registry. The `seeds::program`
+    /// + canonical bump constraint binds this account to the signer's pubkey
+    /// derived under oracle_registry — preventing a signer from passing some
+    /// other oracle's node as proof of stake.
     #[account(
+        seeds = [b"oracle_node", oracle.key().as_ref()],
+        seeds::program = config.oracle_registry,
+        bump,
         constraint = oracle_node.owner == &config.oracle_registry @ AggregatorError::WrongRegistry,
     )]
     pub oracle_node: UncheckedAccount<'info>,
+
+    /// CHECK: oracle_registry's Registry PDA. Used to read min_stake at submit
+    /// time so that already-slashed oracles cannot keep voting.
+    #[account(
+        seeds = [b"registry"],
+        seeds::program = config.oracle_registry,
+        bump,
+        constraint = registry.owner == &config.oracle_registry @ AggregatorError::WrongRegistry,
+    )]
+    pub registry: UncheckedAccount<'info>,
 
     #[account(
         init_if_needed,
@@ -618,6 +693,14 @@ pub enum AggregatorError {
     WrongRegistry,
     #[msg("OracleNode account data is malformed")]
     OracleNodeMalformed,
+    #[msg("Registry account data is malformed")]
+    RegistryMalformed,
     #[msg("Token account data is malformed")]
     TokenAccountMalformed,
+    #[msg("Oracle node is not active (deregistered)")]
+    OracleNotActive,
+    #[msg("Oracle stake is below the registry's min_stake")]
+    InsufficientStake,
+    #[msg("remaining_accounts[i] does not match expected OracleNode for submissions[i].oracle")]
+    OracleNodeBindingMismatch,
 }
