@@ -38,11 +38,8 @@ import { buildExplorerUrl, bytes32FromSeed, cn, formatUsdc } from "@/lib/utils";
 import { useVistaProgram } from "@/lib/use-vista-program";
 import { depositCampaign, usdcToBn } from "@/lib/vista-actions";
 import { crossChainVaultPda } from "@/lib/solana";
-import {
-  EVM_CHAINS,
-  wagmiConfig,
-  type SupportedEvmChainKey,
-} from "@/lib/evm/config";
+import { EVM_CHAINS, type SupportedEvmChainKey } from "@/lib/evm/chains";
+import { wagmiConfig } from "@/lib/evm/config";
 import { VISTA_GATEWAY_ABI } from "@/lib/evm/vista-gateway";
 import { USDC_ABI, usdcUnits } from "@/lib/evm/usdc";
 import { solanaPubkeyToBytes32 } from "@/lib/evm/solana-bytes";

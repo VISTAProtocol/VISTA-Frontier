@@ -5,10 +5,19 @@ import { VistaRegisterBanner } from "@/modules/vista/components/VistaRegisterBan
 import { useActiveCampaigns } from "@/modules/vista/hooks/useActiveCampaigns";
 import { useVistaUser } from "@/modules/vista/hooks/useVistaUser";
 
-export default function HeroSection({ posts, ads = [], userWallet }) {
+export default function HeroSection({
+  posts,
+  ads = [],
+  userWallet,
+  // Optional. When provided, overrides which wallet the SDK reports to the
+  // oracle (e.g. an EVM address). User profile + campaign targeting still
+  // use `userWallet` (the Solana primary). Undefined → SDK uses userWallet.
+  sdkUserWallet,
+}) {
   const { campaigns: vistaCampaigns } = useActiveCampaigns(userWallet);
   useVistaUser(userWallet);
   const [totalEarned, setTotalEarned] = useState(0);
+  const sdkWallet = sdkUserWallet ?? userWallet;
 
   useEffect(() => {
     const handleMessage = (event) => {
@@ -115,7 +124,7 @@ export default function HeroSection({ posts, ads = [], userWallet }) {
                 <VistaAdCard
                   key={`vista-ad-${i}`}
                   campaign={ad}
-                  userWallet={userWallet}
+                  userWallet={sdkWallet}
                   onEarn={handleEarn}
                 />
               ) : null;

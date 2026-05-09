@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import HeroSection from "@/modules/home/components/HeroSection";
 import NavBar from "@/modules/home/components/NavBar";
 import TrendingSection from "@/modules/home/components/TrendingSection";
+import WalletIdentityBanner from "@/modules/auth/WalletIdentityBanner";
 import {
   CHANNELS,
   FEED_POSTS,
@@ -21,6 +22,11 @@ function toWalletUser(address) {
 export default function HomePage() {
   const [currentUser, setCurrentUser] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
+  // Optional override — when the user picks an EVM wallet from the identity
+  // banner, sessions are reported with that EVM address. Oracle-node
+  // resolves it back to the Solana primary before settlement.
+  const [activeWalletOverride, setActiveWalletOverride] = useState(null);
+  const effectiveWallet = activeWalletOverride ?? currentUser?.address;
 
   useEffect(() => {
     let isActive = true;
@@ -81,10 +87,17 @@ export default function HomePage() {
         />
 
         <section id="discover" className="min-w-0">
+          {currentUser?.address ? (
+            <WalletIdentityBanner
+              solanaPrimary={currentUser.address}
+              onActiveWalletChange={setActiveWalletOverride}
+            />
+          ) : null}
           <HeroSection
             posts={FEED_POSTS}
             ads={campaigns}
             userWallet={currentUser?.address}
+            sdkUserWallet={effectiveWallet}
           />
         </section>
 
