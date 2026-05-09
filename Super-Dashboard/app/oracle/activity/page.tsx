@@ -35,9 +35,9 @@ export default function OracleActivityPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Oracle Network"
-        title="Active oracles"
-        description="Live list of oracle nodes currently registered on the VISTA registry. The SDK fans heartbeats out across this set."
+        eyebrow="Network · all validators"
+        title="Active oracles (network-wide)"
+        description="Live list of every oracle node registered on the VISTA registry — not just yours. The SDK fans heartbeats out across this entire set."
       />
       <Card className="bg-card/90">
         <CardHeader>

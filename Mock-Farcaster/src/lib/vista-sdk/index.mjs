@@ -49,30 +49,95 @@ var S = class {
 var I = class {
   constructor(t) {
     this.intervalId = null;
-    this.oracleUrl = t;
+    this.refreshIntervalId = null;
+    this.dashboardUrl = t ? String(t).replace(/\/+$/, "") : null;
+    this.endpoints = [];
+    this.inFlight = false;
+  }
+  async refresh() {
+    if (!this.dashboardUrl) return;
+    try {
+      const res = await fetch(`${this.dashboardUrl}/api/oracle/active-nodes`);
+      if (!res.ok) return;
+      const json = await res.json();
+      this.endpoints = (json.nodes || [])
+        .filter((n) => n.active && n.endpoint_url)
+        .map((n) => String(n.endpoint_url).replace(/\/+$/, ""));
+    } catch (err) {
+      console.warn("[VISTA] active-nodes refresh failed:", err);
+    }
+  }
+  getEndpoints() {
+    return this.endpoints.slice();
   }
   start(t, e, o) {
+    this.refresh();
+    this.refreshIntervalId = setInterval(() => {
+      this.refresh();
+    }, 6e4);
     this.intervalId = setInterval(async () => {
-      if (!(o && o()))
-        try {
-          let n = t();
-          console.log("Payload:", n);
-          let v = await (
-            await fetch(`${this.oracleUrl}/heartbeat`, {
+      if (o && o()) return;
+      if (this.inFlight) return;
+      if (this.endpoints.length === 0) return;
+      this.inFlight = true;
+      try {
+        const payload = t();
+        const body = JSON.stringify(payload);
+        // Per-fetch timeout so a single hung oracle can't block the entire
+        // fan-out and starve subsequent ticks via inFlight=true. 800ms is
+        // generous for healthy local oracles (~20ms RTT).
+        const FETCH_TIMEOUT_MS = 800;
+        const results = await Promise.allSettled(
+          this.endpoints.map((url) => {
+            const ctrl = new AbortController();
+            const timeoutId = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+            return fetch(`${url}/heartbeat`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(n),
+              body,
+              signal: ctrl.signal,
             })
-          ).json();
-          e(v);
-        } catch (n) {
-          console.warn("[VISTA] Heartbeat failed:", n);
+              .then((r) => r.json())
+              .finally(() => clearTimeout(timeoutId));
+          }),
+        );
+        let pick = null;
+        for (const r of results) {
+          if (r.status !== "fulfilled") continue;
+          const v = r.value;
+          if (!pick) pick = v;
+          if (
+            v &&
+            v.valid &&
+            (!pick.valid || (v.validSeconds || 0) > (pick.validSeconds || 0))
+          ) {
+            pick = v;
+          }
         }
-    }, 5e3);
+        if (pick) e(pick);
+        const failures = results.filter((r) => r.status === "rejected").length;
+        if (failures === results.length) {
+          console.warn(
+            `[VISTA] Heartbeat: all ${results.length} oracles failed.`,
+          );
+        }
+      } catch (err) {
+        console.warn("[VISTA] Heartbeat fan-out errored:", err);
+      } finally {
+        this.inFlight = false;
+      }
+    }, 1e3); // 1Hz — gives ~10 heartbeats per 10s on-chain window so a
+              // single dropped/throttled tick can't starve the cranker.
   }
   stop() {
-    this.intervalId &&
-      (clearInterval(this.intervalId), (this.intervalId = null));
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    if (this.refreshIntervalId) {
+      clearInterval(this.refreshIntervalId);
+      this.refreshIntervalId = null;
+    }
   }
 };
 var A = class {
@@ -128,14 +193,13 @@ var k = class {
       let e = [
         "apiKey",
         "userWallet",
-        "oracleUrl",
+        "dashboardUrl",
         "campaignId",
-        "publisherWallet",
       ];
       for (let o of e) if (!t[o]) throw new Error(`VISTA: ${o} is required`);
       (this.removeSessionEndListeners(),
         (this.config = t),
-        (this.sender = new I(t.oracleUrl)),
+        (this.sender = new I(t.dashboardUrl)),
         (this.sessionManager = new A()),
         this.setupSessionEndListeners());
     }
@@ -152,6 +216,12 @@ var k = class {
         (this.trackedElementId = t),
         (this.isActive = !0),
         (this.startTime = Date.now()),
+        // Reset per-session counters so a re-attach (after detach) starts
+        // from zero instead of inheriting the previous run's totals.
+        (this.sessionAmount = 0),
+        (this.lastValidSeconds = 0),
+        (this.lastScore = 0),
+        (this.lastHeartbeatTs = null),
         this.config.requireFullscreen && this.setupFullscreenListener(),
         this.sender.start(
           () => this.buildPayload(),
@@ -529,33 +599,61 @@ var k = class {
         (this.overlayScrollHandler = c),
         window.addEventListener("scroll", c, { passive: !0 }),
         window.addEventListener("resize", c, { passive: !0 }));
-      let b = g;
+      // Live overlay: compute attention + accumulate USDC LOCALLY from the
+      // collector signals every 100ms. The oracle network's job is on-chain
+      // attestation (submit_verification → tick_stream); the overlay
+      // shouldn't go silent just because a heartbeat round-trip is slow,
+      // CORS-blocked, or one of the 3 oracles transiently 503'd. We use the
+      // same `calculateScore` rubric the SDK already ships (visibility +
+      // tab focus + mouse + scroll → 0–1), then display 0–100%.
+      let lastTickTs = Date.now();
+      const PREDICTION_RATE = 333e-6; // USDC/sec, matches handleResponse rate
       ((this.overlayIntervalId = window.setInterval(() => {
-        let s = this.getStatus(),
-          x = isNaN(s.sessionAmount) ? 0 : s.sessionAmount,
-          i = isNaN(s.score) ? 0 : s.score,
-          h = isNaN(s.validSeconds) ? 0 : s.validSeconds,
-          a = document.getElementById("vista-overlay-amount"),
-          p = document.getElementById("vista-overlay-score"),
-          E = document.getElementById("vista-overlay-seconds"),
-          M = document.getElementById("vista-status-dot"),
-          C = document.getElementById("vista-status-text");
-        if (a && x !== b) {
-          let $ = b;
-          ((b = x), this.animateValue(a, $, x, 700, y));
+        const a = document.getElementById("vista-overlay-amount");
+        const p = document.getElementById("vista-overlay-score");
+        const E = document.getElementById("vista-overlay-seconds");
+        const M = document.getElementById("vista-status-dot");
+        const C = document.getElementById("vista-status-text");
+
+        const isActive = this.isActive && !!this.collector;
+        // Compute fresh local score from the collector's current signals.
+        // 0 if the zone is detached / collector torn down.
+        let liveScore01 = 0;
+        if (isActive) {
+          try {
+            const signals = this.collector.collect();
+            liveScore01 = this.collector.calculateScore(signals) ?? 0;
+          } catch {
+            liveScore01 = 0;
+          }
         }
-        p && (p.textContent = `${Math.round(i * 100)}%`);
+        // Display attention as 0–100%.
+        const pct = Math.max(0, Math.min(100, Math.round(liveScore01 * 100)));
+        if (p) p.textContent = `${pct}%`;
+
+        // Accumulate USDC on every overlay tick when actively scoring.
+        // sessionAmount is the canonical local counter; getStatus() uses it
+        // for downstream consumers (earn callback, dashboard, etc.).
+        const now = Date.now();
+        const deltaSec = Math.max(0, (now - lastTickTs) / 1000);
+        lastTickTs = now;
+        if (isActive && liveScore01 > 0 && deltaSec > 0) {
+          this.sessionAmount = (this.sessionAmount || 0) + deltaSec * liveScore01 * PREDICTION_RATE;
+          this.lastValidSeconds = (this.lastValidSeconds || 0) + deltaSec * liveScore01;
+          this.lastScore = pct; // mirror the live attention so getStatus() reports current
+        }
+        if (a) a.innerHTML = y(this.sessionAmount || 0);
+
         if (E) {
-          let dur = Math.floor((Date.now() - this.startTime) / 1e3);
+          const dur = Math.floor((now - this.startTime) / 1e3);
           E.textContent = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
         }
-        (M && (M.style.background = s.active ? n.primary : n.muted),
-          C &&
-            ((C.textContent = s.active
-              ? "MONETIZING ACTIVE"
-              : "TRACKING PAUSED"),
-            (C.style.color = s.active ? n.primary : n.muted)));
-      }, 1e3)),
+        if (M) M.style.background = isActive ? n.primary : n.muted;
+        if (C) {
+          C.textContent = isActive ? "MONETIZING ACTIVE" : "TRACKING PAUSED";
+          C.style.color = isActive ? n.primary : n.muted;
+        }
+      }, 100)),
         e &&
           !o &&
           ((this.overlayFullscreenHandler = () => {
@@ -609,36 +707,61 @@ var k = class {
       };
     }
     handleResponse(t) {
-      if (((this.lastScore = t.score), !t.valid)) return;
-      let e = t.validSeconds - this.lastValidSeconds;
-      if (
-        ((this.lastValidSeconds = t.validSeconds), e > 0 && this.earnCallback)
-      ) {
-        let o = e * 333e-6;
-        ((this.sessionAmount += o),
-          this.earnCallback({
-            sessionAmount: this.sessionAmount,
-            tickAmount: o,
-            validSeconds: t.validSeconds,
-            score: t.score,
-            flagged: t.flagged,
-          }));
+      // Oracle response shape is `{ received, score }` (no `valid` /
+      // `validSeconds` fields). Treat any 200 response as a confirmation
+      // that this heartbeat reached at least one oracle. We progress the
+      // session amount client-side off the wall-clock delta between the
+      // last heartbeat and this one — that gives the same behaviour as
+      // the legacy "validSeconds" path without depending on the oracle to
+      // echo it back.
+      this.lastScore = typeof t?.score === "number" ? t.score : 0;
+      const now = Date.now();
+      if (this.lastHeartbeatTs == null) {
+        this.lastHeartbeatTs = now;
+        return;
+      }
+      const deltaSec = Math.max(0, (now - this.lastHeartbeatTs) / 1000);
+      this.lastHeartbeatTs = now;
+      if (deltaSec <= 0) return;
+      // Only credit if the score is non-zero — a zero score means the
+      // signal collector saw no attention this window.
+      if (this.lastScore <= 0) return;
+      this.lastValidSeconds += deltaSec;
+      const inc = deltaSec * 333e-6;
+      this.sessionAmount += inc;
+      if (this.earnCallback) {
+        this.earnCallback({
+          sessionAmount: this.sessionAmount,
+          tickAmount: inc,
+          validSeconds: this.lastValidSeconds,
+          score: this.lastScore,
+          flagged: !!t?.flagged,
+        });
       }
     }
     async postSessionEnd() {
-      if (!(!this.config || !this.sessionManager))
-        try {
-          await fetch(`${this.config.oracleUrl}/session/end`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: this.sessionManager.getSessionId(),
-              apiKey: this.config.apiKey,
+      if (!this.config || !this.sessionManager || !this.sender) return;
+      const endpoints = this.sender.getEndpoints
+        ? this.sender.getEndpoints()
+        : [];
+      if (endpoints.length === 0) return;
+      const body = JSON.stringify({
+        sessionId: this.sessionManager.getSessionId(),
+        apiKey: this.config.apiKey,
+      });
+      try {
+        await Promise.allSettled(
+          endpoints.map((url) =>
+            fetch(`${url}/session/end`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body,
             }),
-          });
-        } catch (t) {
-          console.warn("[VISTA] Session end failed:", t);
-        }
+          ),
+        );
+      } catch (t) {
+        console.warn("[VISTA] Session end failed:", t);
+      }
     }
     setupFullscreenListener() {
       ((this.isFullscreenActive = this.checkIsFullscreen()),

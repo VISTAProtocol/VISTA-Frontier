@@ -8,10 +8,17 @@ Vista is a decentralized advertising infrastructure that enables users to earn U
 
 ## 🚀 Live Demos
 
-- **Mock Farcaster Client:** [https://vista-base.vercel.app/](https://vista-base.vercel.app/)
-- **Protocol Dashboard:** [http://vista-dashboard-base.vercel.app/](http://vista-dashboard-base.vercel.app/)
+> **Note:** the previously linked URLs (`vista-base.vercel.app`, `vista-dashboard-base.vercel.app`) hosted the older **Base Sepolia EVM** build and have been retired. The Solana port is verified-working locally; redeploy is pending — see [`.superstack/deploy-checklist.md`](./.superstack/deploy-checklist.md). Demo URLs will be added here after re-deployment.
 
-> Note: live demos still point at the previous Base Sepolia deployment. Migration to Solana is in progress.
+For now, run locally:
+
+```bash
+# In separate terminals, after `npm install` in each:
+cd Super-Dashboard && npm run dev   # http://localhost:3031
+cd Mock-Farcaster   && npm run dev   # http://localhost:3000
+```
+
+The four Anchor programs are deployed on Solana devnet (program IDs in `Solana-Program/Anchor.toml`).
 
 ---
 
@@ -51,8 +58,13 @@ A functional demonstration of how the Vista SDK transforms a standard social med
 
 ## ⚙️ Core Components
 
-- **Solana Programs:** Anchor programs handling settlement, rewards minting, and cross-chain bridging via LayerZero V2.
-- **Vista SDK:** Browser library for attention tracking and heartbeat reporting.
+- **Solana Programs (Anchor 1.0.2 on Solana 3.x):**
+  - `vista_protocol` — campaign escrow, oracle settlement, payouts (30/50/10/10 split: user/publisher/validator/protocol fee), soulbound receipts.
+  - `oracle_registry` — oracle staking, slashing, reward claims (100 USDC min stake, 7-day unstake lockup).
+  - `attention_aggregator` — multi-oracle consensus, outlier detection (deviation-bps threshold), permissionless settlement that slashes outliers and credits honest oracles via CPI.
+  - `vista_bridge` — cross-chain campaign reception. **Trust model:** Circle CCTP delivers USDC trustlessly into a per-campaign vault PDA; campaign metadata is gated by an `lz_executor_authority` signer (hackathon trusted-relayer mode — LayerZero V2 executor PDA migration is one constraint change away). See [Hackathon Trust Assumptions](#-hackathon-trust-assumptions) below.
+- **Vista SDK** (`/sdk`): browser library publishers embed for real-time attention tracking + oracle heartbeat reporting. See [`sdk/README.md`](./sdk/README.md).
+- **Oracle Node** (`/oracle-node`): stakeable Node.js service that verifies attention heartbeats, watches CCTP attestations, and submits to the aggregator.
 
 ## 🔐 Hackathon Trust Assumptions
 
@@ -69,10 +81,27 @@ These are fine for a devnet demo. **For mainnet:** raise `min_quorum` to a sybil
 
 ## 🛠️ Repository Structure
 
-- `/Solana-Program`: Anchor programs (e.g. `vista_bridge`) for the Solana runtime.
-- `/sdk`: TypeScript SDK (`vista-protocol`) that publishers embed in their apps.
-- `/Super-Dashboard`: Next.js application for the protocol management UI (porting to Solana).
-- `/Mock-Farcaster`: Example integration showing the SDK in a social media context (porting to Solana).
+- `/Solana-Program` — 4 Anchor 1.0 programs (vista_protocol, vista_bridge, oracle_registry, attention_aggregator) + tests + devnet-e2e script.
+- `/sdk` — TypeScript SDK (`vista-protocol`) that publishers embed. See [`sdk/README.md`](./sdk/README.md).
+- `/oracle-node` — stakeable oracle node implementation (TS + viem for EVM event watching).
+- `/Super-Dashboard` — Next.js 16 dashboard (advertiser/publisher/user/oracle views).
+- `/Mock-Farcaster` — Next.js 16 demo client showing real-time SDK earnings ticker.
+- `/contracts/evm` — Foundry contracts for the EVM side of cross-chain advertiser deposits (`VistaGateway`).
+- `/.superstack` — internal engineering docs:
+  - [`security-audit.md`](./.superstack/security-audit.md) — security findings + fixes
+  - [`deploy-checklist.md`](./.superstack/deploy-checklist.md) — devnet redeploy + Vercel runbook
+  - [`build-context.md`](./.superstack/build-context.md) — current stack snapshot
+  - [`dependency-audit.md`](./.superstack/dependency-audit.md) — version compatibility matrix
+  - [`npm-audit-triage.md`](./.superstack/npm-audit-triage.md) — vuln triage
+
+## 🧪 Run tests
+
+```bash
+cd Solana-Program
+anchor test    # Surfpool-backed; expects anchor-cli 1.0.2 + surfpool 1.1.2
+```
+
+26/26 tests passing — see `Solana-Program/tests/` (vista_protocol, vista_bridge, oracle_registry, attention_aggregator).
 
 ---
 

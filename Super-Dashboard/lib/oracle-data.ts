@@ -210,6 +210,69 @@ type SyncEvent =
         stage: string;
         error: string;
       };
+    }
+  | {
+      event: "campaign_created";
+      payload: {
+        campaign_id_onchain: string;
+        advertiser_wallet: string;
+        total_budget: string;
+        rate_per_second: string;
+        block_slot: number;
+      };
+    }
+  | {
+      event: "stream_started";
+      payload: {
+        session_id_onchain: string;
+        campaign_id_onchain: string;
+        user_wallet: string;
+        publisher_wallet: string;
+        started_at: string;
+      };
+    }
+  | {
+      event: "stream_tick";
+      payload: {
+        session_id_onchain: string;
+        user_wallet: string;
+        publisher_wallet: string;
+        total_amount: string;
+        user_amount: string;
+        publisher_amount: string;
+        validator_amount: string;
+        vista_amount: string;
+        block_timestamp: string;
+      };
+    }
+  | {
+      event: "stream_ended";
+      payload: {
+        session_id_onchain: string;
+        seconds_verified: number;
+        total_paid: string;
+        ended_at: string;
+      };
+    }
+  | {
+      event: "receipt_minted";
+      payload: {
+        token_id: string;
+        session_id_onchain: string;
+        campaign_id_onchain: string;
+        user_wallet: string;
+        seconds_verified: number;
+        usdc_paid: string;
+        minted_at: string;
+      };
+    }
+  | {
+      event: "withdrawn";
+      payload: {
+        wallet: string;
+        amount: string;
+        withdrawn_at: string;
+      };
     };
 
 export async function applyOracleSyncEvent(evt: SyncEvent) {
@@ -339,6 +402,167 @@ export async function applyOracleSyncEvent(evt: SyncEvent) {
         .from("campaigns")
         .update({ bridge_status: "failed" })
         .eq("campaign_id_onchain", evt.payload.campaign_id_onchain.toLowerCase());
+      return;
+    }
+    case "campaign_created": {
+      // Backfill in case the dashboard never saw the off-chain create. The
+      // creative_url/title/target_url are unknown from the chain event, so
+      // leave them as placeholders if the row is brand new — the frontend
+      // upsert flow will fill them in on the next user-initiated write.
+      await supabase.from("campaigns").upsert(
+        {
+          campaign_id_onchain: evt.payload.campaign_id_onchain.toLowerCase(),
+          advertiser_wallet: evt.payload.advertiser_wallet,
+          total_budget: Number(evt.payload.total_budget),
+          remaining_budget: Number(evt.payload.total_budget),
+          rate_per_second: Number(evt.payload.rate_per_second),
+          title: "(synced from chain)",
+          creative_url: "",
+          target_url: "",
+          active: true,
+        },
+        { onConflict: "campaign_id_onchain", ignoreDuplicates: true },
+      );
+      return;
+    }
+    case "stream_started": {
+      await supabase.from("sessions").upsert(
+        {
+          session_id_onchain: evt.payload.session_id_onchain,
+          campaign_id_onchain: evt.payload.campaign_id_onchain.toLowerCase(),
+          user_wallet: evt.payload.user_wallet,
+          publisher_wallet: evt.payload.publisher_wallet,
+          active: true,
+          started_at: evt.payload.started_at,
+        },
+        { onConflict: "session_id_onchain" },
+      );
+      return;
+    }
+    case "stream_tick": {
+      // Insert per-tick row + roll up totals on sessions + write per-role
+      // vault_credits ledger entries so getVaultBalance(wallet) sees a non-
+      // zero earned balance.
+      //
+      // The on-chain StreamTick event carries raw u64 USDC base units
+      // (6 decimals — e.g. 432 = 0.000432 USDC). Every reader downstream
+      // (UsdcCounter, getUserDashboard.currentAmount, getPublisherAnalytics,
+      // getVaultBalance, etc.) treats the column as a USDC decimal number,
+      // not raw atoms — recordStreamTick (data.ts:1957) already follows
+      // that convention. Convert here to keep the schema consistent.
+      const RAW_TO_USDC = 1_000_000; // 10 ** USDC_DECIMALS
+      const total = Number(evt.payload.total_amount) / RAW_TO_USDC;
+      const userAmt = Number(evt.payload.user_amount) / RAW_TO_USDC;
+      const publisherAmt = Number(evt.payload.publisher_amount) / RAW_TO_USDC;
+      const validatorAmt = Number(evt.payload.validator_amount) / RAW_TO_USDC;
+      const vistaAmt = Number(evt.payload.vista_amount) / RAW_TO_USDC;
+
+      await supabase.from("stream_ticks").insert({
+        session_id_onchain: evt.payload.session_id_onchain,
+        user_wallet: evt.payload.user_wallet,
+        publisher_wallet: evt.payload.publisher_wallet,
+        user_amount: userAmt,
+        publisher_amount: publisherAmt,
+        validator_amount: validatorAmt,
+        vista_amount: vistaAmt,
+        total_amount: total,
+        seconds_elapsed: 0,
+        block_timestamp: evt.payload.block_timestamp,
+      });
+
+      // Look up the session to get campaign_id (needed by vault_credits) and
+      // the running total_paid for the rollup. total_paid_usdc is stored in
+      // USDC decimal — `total` is already converted above, so the addition
+      // stays in the same unit.
+      const { data: sess } = await supabase
+        .from("sessions")
+        .select("total_paid_usdc, campaign_id_onchain")
+        .eq("session_id_onchain", evt.payload.session_id_onchain)
+        .maybeSingle();
+      const sessRow = (sess ?? {}) as {
+        total_paid_usdc?: number;
+        campaign_id_onchain?: string;
+      };
+      const prevTotal = Number(sessRow.total_paid_usdc ?? 0);
+      const campaignId = sessRow.campaign_id_onchain ?? "";
+
+      await supabase
+        .from("sessions")
+        .update({ total_paid_usdc: prevTotal + total })
+        .eq("session_id_onchain", evt.payload.session_id_onchain);
+
+      // Per-role vault_credits rows so the user/publisher dashboards see
+      // their accrued balance.
+      await supabase.from("vault_credits").insert([
+        {
+          wallet_address: evt.payload.user_wallet,
+          session_id_onchain: evt.payload.session_id_onchain,
+          campaign_id_onchain: campaignId,
+          amount: userAmt,
+          role: 0,
+          credited_at: evt.payload.block_timestamp,
+        },
+        {
+          wallet_address: evt.payload.publisher_wallet,
+          session_id_onchain: evt.payload.session_id_onchain,
+          campaign_id_onchain: campaignId,
+          amount: publisherAmt,
+          role: 1,
+          credited_at: evt.payload.block_timestamp,
+        },
+      ]);
+      return;
+    }
+    case "stream_ended": {
+      // sessions.total_paid_usdc + receipts.usdc_paid + vault_*.amount are
+      // stored as USDC decimal across the codebase (see recordStreamTick at
+      // data.ts:1979). Convert from the on-chain raw u64 (6-decimal) here.
+      const totalPaidUsdc = Number(evt.payload.total_paid) / 1_000_000;
+      await supabase
+        .from("sessions")
+        .update({
+          active: false,
+          ended_at: evt.payload.ended_at,
+          seconds_verified: evt.payload.seconds_verified,
+          total_paid_usdc: totalPaidUsdc,
+        })
+        .eq("session_id_onchain", evt.payload.session_id_onchain);
+      return;
+    }
+    case "receipt_minted": {
+      // The receipts table requires advertiser_wallet, which is not in the
+      // event payload — look it up from the campaign.
+      const { data: camp } = await supabase
+        .from("campaigns")
+        .select("advertiser_wallet, chain")
+        .eq("campaign_id_onchain", evt.payload.campaign_id_onchain.toLowerCase())
+        .maybeSingle();
+      const advertiserWallet =
+        (camp as { advertiser_wallet?: string } | null)?.advertiser_wallet ?? "";
+      const chain = (camp as { chain?: string } | null)?.chain ?? "solana-devnet";
+
+      await supabase.from("receipts").insert({
+        token_id: evt.payload.token_id,
+        session_id_onchain: evt.payload.session_id_onchain,
+        user_wallet: evt.payload.user_wallet,
+        advertiser_wallet: advertiserWallet,
+        campaign_id_onchain: evt.payload.campaign_id_onchain.toLowerCase(),
+        chain,
+        platform: "vista",
+        seconds_verified: evt.payload.seconds_verified,
+        usdc_paid: Number(evt.payload.usdc_paid) / 1_000_000,
+        minted_at: evt.payload.minted_at,
+      });
+      return;
+    }
+    case "withdrawn": {
+      // vault_withdrawals.amount is read by getVaultBalance.totalWithdrawn
+      // and rendered as USDC. Convert raw u64 → decimal.
+      await supabase.from("vault_withdrawals").insert({
+        wallet_address: evt.payload.wallet,
+        amount: Number(evt.payload.amount) / 1_000_000,
+        withdrawn_at: evt.payload.withdrawn_at,
+      });
       return;
     }
     case "session_aggregated": {

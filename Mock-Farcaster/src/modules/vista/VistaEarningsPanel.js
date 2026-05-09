@@ -62,7 +62,9 @@ export default function VistaEarningsPanel({
 
   // ── Supabase fetch + Realtime ──────────────────────────────
   useEffect(() => {
-    const wallet = userWallet?.toLowerCase();
+    // Solana base58 pubkeys are case-sensitive — lowercasing here drops
+    // the row match because user_wallet is stored case-correctly upstream.
+    const wallet = userWallet?.trim();
     if (!wallet) {
       setStats({ lastSession: 0, total: 0, unclaimed: 0, loading: false });
       return;
@@ -129,7 +131,7 @@ export default function VistaEarningsPanel({
         { event: "INSERT", schema: "public", table: "stream_ticks" },
         (payload) => {
           const row = payload.new;
-          if (row.user_wallet?.toLowerCase() !== wallet) return;
+          if (row.user_wallet !== wallet) return;
           const amount = Number(row.user_amount ?? 0);
           const isLatest = row.session_id_onchain === latestSessionIdRef.current;
           setStats((s) => ({

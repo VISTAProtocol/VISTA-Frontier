@@ -9,13 +9,13 @@ interface ActiveNode {
 }
 
 /**
- * Combines a static set of oracle URLs (from `VistaConfig.oracleUrl`) with a
- * dynamically-refreshed list pulled from
+ * Combines an optional static set of oracle URLs (from `VistaConfig.oracleUrl`)
+ * with a dynamically-refreshed list pulled from
  * `${dashboardUrl}/api/oracle/active-nodes`. Heartbeats fan out to the union.
  *
- * The static list always remains in the result so a misconfigured / offline
- * dashboard does not silently break heartbeat delivery — this is the "trust
- * one oracle" fallback.
+ * The trustless default is to leave `staticUrls` empty and let the dashboard
+ * advertise the active oracle set. A non-empty `staticUrls` still works as a
+ * "trust one oracle" override.
  */
 export class OracleDiscovery implements OracleEndpointProvider {
   private staticEndpoints: string[];
@@ -23,7 +23,7 @@ export class OracleDiscovery implements OracleEndpointProvider {
   private dashboardUrl: string | null;
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(staticUrls: string | string[], dashboardUrl?: string) {
+  constructor(staticUrls: string | string[] = [], dashboardUrl?: string) {
     const arr = Array.isArray(staticUrls) ? staticUrls : [staticUrls];
     this.staticEndpoints = arr.map((u) => u.replace(/\/+$/, '')).filter(Boolean);
     this.dashboardUrl = dashboardUrl?.replace(/\/+$/, '') ?? null;

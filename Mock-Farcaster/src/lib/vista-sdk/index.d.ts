@@ -1,9 +1,20 @@
 interface VistaConfig {
   apiKey: string;
   userWallet: string;
-  oracleUrl: string;
+  /**
+   * Super-Dashboard base URL. The SDK fetches the active oracle set from
+   * `${dashboardUrl}/api/oracle/active-nodes` and fans heartbeats out to all
+   * of them. Required.
+   */
+  dashboardUrl: string;
   campaignId: string;
-  publisherWallet: string;
+  /**
+   * Optional Solana base58 pubkey. When omitted, the oracle resolves the
+   * publisher's wallet from `apiKey` via the dashboard. Override only if
+   * the heartbeat should attribute earnings to a wallet different from the
+   * one registered in Supabase.
+   */
+  publisherWallet?: string;
   requireFullscreen?: boolean;
 }
 interface AttentionSignals {

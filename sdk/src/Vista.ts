@@ -35,19 +35,26 @@ export class Vista {
     const required: (keyof VistaConfig)[] = [
       'apiKey',
       'userWallet',
-      'oracleUrl',
       'campaignId',
-      'publisherWallet',
     ];
     for (const field of required) {
       const v = config[field];
-      if (v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)) {
+      if (v === undefined || v === null || v === '') {
         throw new Error(`VISTA: ${field} is required`);
       }
     }
+    // Either dashboard discovery or a static oracle URL must be configured —
+    // otherwise heartbeats have nowhere to go.
+    const hasStatic =
+      typeof config.oracleUrl === 'string'
+        ? config.oracleUrl.length > 0
+        : Array.isArray(config.oracleUrl) && config.oracleUrl.length > 0;
+    if (!config.dashboardUrl && !hasStatic) {
+      throw new Error('VISTA: dashboardUrl is required (or supply oracleUrl)');
+    }
     this.removeSessionEndListeners();
     this.config = config;
-    this.discovery = new OracleDiscovery(config.oracleUrl, config.dashboardUrl);
+    this.discovery = new OracleDiscovery(config.oracleUrl ?? [], config.dashboardUrl);
     this.sender = new HeartbeatSender(this.discovery);
     this.sessionManager = new SessionManager();
     this.setupSessionEndListeners();

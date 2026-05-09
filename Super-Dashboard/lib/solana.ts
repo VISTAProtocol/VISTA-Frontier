@@ -4,43 +4,65 @@ import { clusterApiUrl } from "@solana/web3.js";
 
 export const NETWORK = WalletAdapterNetwork.Devnet;
 
-export const RPC_URL =
-  process.env.NEXT_PUBLIC_SOLANA_RPC ?? clusterApiUrl(NETWORK);
+// Treat empty strings the same as undefined — Next.js inlines NEXT_PUBLIC_*
+// env vars at build time, and a key set to "" in .env reads as "" not
+// undefined, which would defeat `??` fallbacks and crash `new PublicKey("")`.
+function envStr(value: string | undefined, fallback: string): string {
+  const v = value?.trim();
+  return v && v.length > 0 ? v : fallback;
+}
+
+export const RPC_URL = envStr(
+  process.env.NEXT_PUBLIC_SOLANA_RPC,
+  clusterApiUrl(NETWORK),
+);
 
 // Vista Protocol on devnet (synced via `anchor keys sync`).
 export const VISTA_PROTOCOL_PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_VISTA_PROTOCOL_PROGRAM_ID ??
+  envStr(
+    process.env.NEXT_PUBLIC_VISTA_PROTOCOL_PROGRAM_ID,
     "4Jp9E68gcEMUXTwtm7suQ5wKq6U9jDRK4KPuRs6fReCM",
+  ),
 );
 
 export const VISTA_BRIDGE_PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_VISTA_BRIDGE_PROGRAM_ID ??
+  envStr(
+    process.env.NEXT_PUBLIC_VISTA_BRIDGE_PROGRAM_ID,
     "9R7UWcCQVXW4dKKLYLLRfGQf5prePQBMyTEwd2TMC8sE",
+  ),
 );
 
 export const ORACLE_REGISTRY_PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_ORACLE_REGISTRY_PROGRAM_ID ??
+  envStr(
+    process.env.NEXT_PUBLIC_ORACLE_REGISTRY_PROGRAM_ID,
     "Arf7oEFm7jjaUXYW8of4moy553kczWXxdtf1bDSRpynn",
+  ),
 );
 
 export const ATTENTION_AGGREGATOR_PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_ATTENTION_AGGREGATOR_PROGRAM_ID ??
+  envStr(
+    process.env.NEXT_PUBLIC_ATTENTION_AGGREGATOR_PROGRAM_ID,
     "6MJxBMfkocuzdbR5wJRvh31BAVPrUmk454yB9HnwvXtH",
+  ),
 );
 
 // Circle's official test USDC mint on Solana devnet.
 // Faucet: https://faucet.circle.com (Solana, devnet)
 export const USDC_MINT = new PublicKey(
-  process.env.NEXT_PUBLIC_USDC_MINT ??
+  envStr(
+    process.env.NEXT_PUBLIC_USDC_MINT,
     "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  ),
 );
 
 export const USDC_DECIMALS = 6;
 
 // Vista's protocol fee recipient (set at `initialize`). Update after deploy.
 export const VISTA_FEE_WALLET = new PublicKey(
-  process.env.NEXT_PUBLIC_VISTA_FEE_WALLET ??
+  envStr(
+    process.env.NEXT_PUBLIC_VISTA_FEE_WALLET,
     "11111111111111111111111111111111",
+  ),
 );
 
 export function getConnection(): Connection {

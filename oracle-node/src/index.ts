@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import express from "express";
 import { z } from "zod";
 
-import { SystemProgram } from "@solana/web3.js";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 
 import { AntiReplay } from "./antiReplay.js";
 import { BridgeChainClient } from "./bridgeChain.js";
@@ -12,6 +12,7 @@ import { ChainClient } from "./chain.js";
 import { loadConfig } from "./config.js";
 import { EventListener } from "./eventListener.js";
 import { startEvmWatchers } from "./evmWatcher.js";
+import { PublisherResolver } from "./publisherResolver.js";
 import { SessionBuffer } from "./sessionBuffer.js";
 import { SyncClient } from "./syncClient.js";
 import { scoreSignals } from "./verifier.js";
@@ -44,6 +45,7 @@ async function main() {
   const cfg = loadConfig();
   const chain = new ChainClient(cfg);
   const sync = new SyncClient(cfg);
+  const publisherResolver = new PublisherResolver(cfg);
   const antiReplay = new AntiReplay(
     cfg.antiReplayMaxDriftMs,
     cfg.antiReplayLruSize,
@@ -120,6 +122,15 @@ async function main() {
   });
 
   let active = false;
+  let heartbeatCount = 0;
+
+  // Per-session idempotency caches. The on-chain instructions submit_verification,
+  // start_stream and aggregate_results are *one-shot per session* (the
+  // attention_aggregator window expires; start_stream uses init; aggregate
+  // sets is_settled=true). Only tick_stream runs on every window.
+  const submittedSessions = new Set<string>();
+  const streamStarted = new Set<string>();
+  const aggregatedSessions = new Set<string>();
 
   async function refreshSelf() {
     try {
@@ -144,7 +155,7 @@ async function main() {
   await refreshSelf();
   setInterval(refreshSelf, cfg.selfCheckSeconds * 1000).unref?.();
 
-  const buffer = new SessionBuffer(cfg.windowSeconds * 1000, async (sid, scores) => {
+  const buffer = new SessionBuffer(cfg.windowSeconds * 1000, async ({ sessionId: sid, scores, meta }) => {
     if (!active) {
       console.log(`[oracle-node] skip flush ${sid}: not active`);
       return;
@@ -155,24 +166,181 @@ async function main() {
       console.warn(`[oracle-node] invalid session id format: ${sid}`);
       return;
     }
-    try {
-      const sig = await chain.submitVerification(sessionIdBuf, mean);
-      console.log(`[oracle-node] submitted ${sid} score=${mean} tx=${sig}`);
-      await sync.post({
-        event: "submission",
-        payload: {
-          oracle: chain.keypair.publicKey.toString(),
-          session_id_onchain: sid,
-          score: mean,
-          submitted_at: new Date().toISOString(),
-        },
-      });
-    } catch (err) {
-      console.error(`[oracle-node] submit failed for ${sid}:`, err);
+    // Flush fires every windowSeconds while heartbeats keep arriving. The
+    // log makes it obvious whether the per-window cadence is sustained.
+    console.log(
+      `[oracle-node] flush ${sid} window=${cfg.windowSeconds}s heartbeats=${scores.length} mean=${mean}`,
+    );
+
+    // ── 1. submit_verification (one-shot per session per oracle).
+    // The on-chain aggregator window is short (cfg.window_seconds) and the
+    // program rejects duplicate submissions from the same oracle. We only
+    // submit on the first flush; subsequent flushes during ongoing viewing
+    // skip straight to tick_stream.
+    if (!submittedSessions.has(sid)) {
+      try {
+        const sig = await chain.submitVerification(sessionIdBuf, mean);
+        submittedSessions.add(sid);
+        console.log(`[oracle-node] submitted ${sid} score=${mean} tx=${sig}`);
+        await sync.post({
+          event: "submission",
+          payload: {
+            oracle: chain.keypair.publicKey.toString(),
+            session_id_onchain: sid,
+            score: mean,
+            submitted_at: new Date().toISOString(),
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // AlreadySubmitted (0x1773) / WindowExpired (0x1776) / AlreadySettled
+        // mean we should never re-attempt for this session — flag it done.
+        if (
+          msg.includes("AlreadySubmitted") ||
+          msg.includes("WindowExpired") ||
+          msg.includes("AlreadySettled") ||
+          msg.includes("0x1773") ||
+          msg.includes("0x1776")
+        ) {
+          submittedSessions.add(sid);
+        } else {
+          console.error(`[oracle-node] submit failed for ${sid}:`, msg);
+          return;
+        }
+      }
+    }
+
+    // ── 2. Stream cranker (only the designated stream oracle) ─────────────
+    const vistaCfg = await chain.fetchVistaConfig().catch(() => null);
+    const isStreamOracle = vistaCfg ? chain.isStreamOracle(vistaCfg) : false;
+    const campaignIdBuf = parseCampaignId(meta.campaignId);
+    const userPk = parsePubkey(meta.userWallet);
+
+    // publisherWallet is optional in the SDK heartbeat — when missing or
+    // unparseable (e.g. legacy Mock-Farcaster sending an EVM hex address),
+    // resolve it server-side from `apiKey` via the dashboard's
+    // /api/publishers/verify-apikey lookup.
+    let publisherPk = parsePubkey(meta.publisherWallet);
+    if (!publisherPk && meta.apiKey) {
+      const resolved = await publisherResolver.resolve(meta.apiKey);
+      publisherPk = parsePubkey(resolved ?? undefined);
+    }
+
+    if (isStreamOracle && vistaCfg && (!campaignIdBuf || !userPk || !publisherPk)) {
+      console.warn(
+        `[stream-cranker] cannot crank ${sid} — bad meta:`,
+        `userWallet=${meta.userWallet ?? "<missing>"} (parsed=${userPk ? "ok" : "FAIL"})`,
+        `publisherWallet=${meta.publisherWallet ?? "<missing>"} (parsed=${publisherPk ? "ok" : "FAIL"})`,
+        `campaignId=${meta.campaignId ?? "<missing>"} (parsed=${campaignIdBuf ? "ok" : "FAIL"})`,
+        `apiKey=${meta.apiKey ? meta.apiKey.slice(0, 16) + "…" : "<missing>"}`,
+        "— check that the publisher row for this apiKey exists in Supabase, and that userWallet is a Solana base58 pubkey.",
+      );
+    }
+
+    if (isStreamOracle && vistaCfg && campaignIdBuf && userPk && publisherPk) {
+      // start_stream — first window only. Idempotent guard: local set +
+      // catch the on-chain "already in use" account-already-init error.
+      if (!streamStarted.has(sid)) {
+        try {
+          const sig = await chain.startStream({
+            sessionId: sessionIdBuf,
+            campaignId: campaignIdBuf,
+            userWallet: userPk,
+            publisherWallet: publisherPk,
+            usdcMint: vistaCfg.usdcMint,
+          });
+          streamStarted.add(sid);
+          console.log(`[stream-cranker] start_stream ${sid} tx=${sig}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("already in use") || msg.includes("Allocate")) {
+            streamStarted.add(sid);
+          } else {
+            console.warn(`[stream-cranker] start_stream failed for ${sid}:`, msg);
+          }
+        }
+      }
+
+      // tick_stream — runs every window with `windowSeconds` worth of elapsed
+      // viewing time. This is what actually moves USDC from the campaign
+      // vault into the user/publisher escrow PDAs.
+      try {
+        const sig = await chain.tickStream({
+          sessionId: sessionIdBuf,
+          campaignId: campaignIdBuf,
+          userWallet: userPk,
+          publisherWallet: publisherPk,
+          vistaWallet: vistaCfg.vistaWallet,
+          usdcMint: vistaCfg.usdcMint,
+          secondsElapsed: cfg.windowSeconds,
+        });
+        console.log(`[stream-cranker] tick_stream ${sid} tx=${sig}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const logs =
+          (err as { transactionLogs?: string[] }).transactionLogs ??
+          (err as { logs?: string[] }).logs ??
+          [];
+        console.warn(`[stream-cranker] tick_stream failed for ${sid}:`, msg);
+        // Surface the actual on-chain reason so this isn't a black box —
+        // common causes: campaign budget exhausted, advertiser_token empty,
+        // or campaign.active=false after a previous tick zeroed the budget.
+        if (logs.length > 0) {
+          const programReason = logs.find((l: string) =>
+            /AnchorError|Error Message|Error:/i.test(l),
+          );
+          if (programReason) console.warn("  on-chain:", programReason);
+        }
+      }
+    }
+
+    // ── 3. aggregate_results — permissionless one-shot per session. Every
+    // oracle races; whoever runs last (after tick_stream funded the pool +
+    // quorum met) wins. Once we know it's settled, stop retrying.
+    if (!aggregatedSessions.has(sid)) {
+      try {
+        const sig = await chain.aggregateResults(sessionIdBuf);
+        aggregatedSessions.add(sid);
+        console.log(`[stream-cranker] aggregate_results ${sid} tx=${sig}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("AlreadySettled")) {
+          aggregatedSessions.add(sid);
+        } else if (
+          msg.includes("not enough submissions") ||
+          msg.includes("NotReadyToAggregate") ||
+          msg.includes("EmptyPool") ||
+          msg.includes("AccountNotInitialized") ||
+          msg.includes("InsufficientSubmissions") ||
+          msg.includes("RemainingAccountsMismatch")
+        ) {
+          // expected race — quorum/funding not ready yet, retry next window
+        } else {
+          console.warn(`[stream-cranker] aggregate_results failed for ${sid}:`, msg);
+        }
+      }
     }
   });
 
   const app = express();
+
+  // Permissive CORS so the browser SDK on a publisher origin can POST
+  // heartbeats directly. Heartbeats already carry their own apiKey + nonce
+  // anti-replay; the oracle is intentionally an open endpoint.
+  app.use((req, res, next) => {
+    const origin = req.headers.origin ?? "*";
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Max-Age", "86400");
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/health", (_req, res) => {
@@ -193,14 +361,37 @@ async function main() {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const { sessionId, timestamp, nonce, signals } = parsed.data;
+    const {
+      sessionId,
+      timestamp,
+      nonce,
+      signals,
+      userWallet,
+      publisherWallet,
+      campaignId,
+      apiKey,
+    } = parsed.data;
     const replay = antiReplay.check(nonce, timestamp);
     if (!replay.ok) {
       res.status(409).json({ error: replay.reason });
       return;
     }
     const score = scoreSignals(signals);
-    buffer.push(sessionId, score);
+    buffer.push(sessionId, score, {
+      userWallet,
+      publisherWallet,
+      campaignId,
+      apiKey,
+    });
+    // Trace every heartbeat receipt so it's obvious whether the SDK is
+    // actually streaming continuously vs. silently stalling. Sampled to
+    // every-other-beat to avoid log spam at 1Hz cadence.
+    heartbeatCount += 1;
+    if (heartbeatCount % 2 === 1) {
+      console.log(
+        `[oracle-node] heartbeat #${heartbeatCount} sid=${sessionId.slice(0, 24)}… score=${score}`,
+      );
+    }
     res.json({ received: true, score });
   });
 
@@ -220,6 +411,22 @@ function sessionIdToBuffer(sessionId: string): Buffer | null {
     return Buffer.from(hex, "hex");
   }
   return createHash("sha256").update(sessionId).digest();
+}
+
+function parseCampaignId(raw: string | undefined): Buffer | null {
+  if (!raw) return null;
+  const hex = raw.startsWith("0x") ? raw.slice(2) : raw;
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) return null;
+  return Buffer.from(hex, "hex");
+}
+
+function parsePubkey(raw: string | undefined): PublicKey | null {
+  if (!raw) return null;
+  try {
+    return new PublicKey(raw);
+  } catch {
+    return null;
+  }
 }
 
 main().catch((err) => {

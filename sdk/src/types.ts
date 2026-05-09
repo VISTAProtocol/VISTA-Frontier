@@ -8,22 +8,28 @@ export interface VistaConfig {
   /** Solana base58 pubkey of the connected user wallet */
   userWallet: string;
   /**
-   * One or more oracle node base URLs. Heartbeats are fanned out in parallel
-   * to every URL via `Promise.allSettled`. Accepts a single string for
-   * backward compatibility.
+   * Optional static oracle node base URL(s). When provided, heartbeats fan
+   * out to these in addition to whatever the dashboard discovery returns.
+   * Most users should leave this empty and rely on `dashboardUrl` for
+   * discovery — the trustless default.
    */
-  oracleUrl: string | string[];
+  oracleUrl?: string | string[];
   /**
-   * Optional Super-Dashboard base URL. When provided, the SDK periodically
-   * fetches `${dashboardUrl}/api/oracle/active-nodes` and broadcasts to every
-   * active oracle (in addition to anything in `oracleUrl`). This is the
-   * trustless mode — users do not have to trust a single oracle endpoint.
+   * Super-Dashboard base URL. The SDK periodically fetches
+   * `${dashboardUrl}/api/oracle/active-nodes` and broadcasts to every active
+   * oracle. Required for the trustless default; optional only when a static
+   * `oracleUrl` is supplied.
    */
   dashboardUrl?: string;
   /** 32-byte hex (with or without 0x prefix) — the campaign PDA seed */
   campaignId: string;
-  /** Solana base58 pubkey of the publisher payout wallet */
-  publisherWallet: string;
+  /**
+   * Optional Solana base58 pubkey of the publisher payout wallet. When omitted
+   * the oracle resolves it server-side from `apiKey` via the dashboard's
+   * `/api/publishers/verify-apikey` lookup. Pass this only to override the
+   * apiKey-derived default.
+   */
+  publisherWallet?: string;
   requireFullscreen?: boolean;
   /**
    * Optional id of a `<video>` element to track for `mediaProgress`. If
@@ -53,7 +59,8 @@ export interface HeartbeatPayload {
   apiKey: string;
   userWallet: string;
   campaignId: string;
-  publisherWallet: string;
+  /** Optional — oracle resolves from `apiKey` when missing. */
+  publisherWallet?: string;
   timestamp: number;
   nonce: string;
   score: number;

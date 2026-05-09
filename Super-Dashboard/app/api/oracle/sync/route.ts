@@ -102,6 +102,69 @@ const eventSchema = z.discriminatedUnion("event", [
       error: z.string(),
     }),
   }),
+  z.object({
+    event: z.literal("campaign_created"),
+    payload: z.object({
+      campaign_id_onchain: z.string(),
+      advertiser_wallet: z.string(),
+      total_budget: z.string(),
+      rate_per_second: z.string(),
+      block_slot: z.coerce.number(),
+    }),
+  }),
+  z.object({
+    event: z.literal("stream_started"),
+    payload: z.object({
+      session_id_onchain: z.string(),
+      campaign_id_onchain: z.string(),
+      user_wallet: z.string(),
+      publisher_wallet: z.string(),
+      started_at: z.string(),
+    }),
+  }),
+  z.object({
+    event: z.literal("stream_tick"),
+    payload: z.object({
+      session_id_onchain: z.string(),
+      user_wallet: z.string(),
+      publisher_wallet: z.string(),
+      total_amount: z.string(),
+      user_amount: z.string(),
+      publisher_amount: z.string(),
+      validator_amount: z.string(),
+      vista_amount: z.string(),
+      block_timestamp: z.string(),
+    }),
+  }),
+  z.object({
+    event: z.literal("stream_ended"),
+    payload: z.object({
+      session_id_onchain: z.string(),
+      seconds_verified: z.coerce.number(),
+      total_paid: z.string(),
+      ended_at: z.string(),
+    }),
+  }),
+  z.object({
+    event: z.literal("receipt_minted"),
+    payload: z.object({
+      token_id: z.string(),
+      session_id_onchain: z.string(),
+      campaign_id_onchain: z.string(),
+      user_wallet: z.string(),
+      seconds_verified: z.coerce.number(),
+      usdc_paid: z.string(),
+      minted_at: z.string(),
+    }),
+  }),
+  z.object({
+    event: z.literal("withdrawn"),
+    payload: z.object({
+      wallet: z.string(),
+      amount: z.string(),
+      withdrawn_at: z.string(),
+    }),
+  }),
 ]);
 
 export async function POST(request: Request) {

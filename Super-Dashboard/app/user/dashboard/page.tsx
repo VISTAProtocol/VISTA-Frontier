@@ -91,6 +91,23 @@ export default function UserDashboardPage() {
     const amountAtoms = vaultBalanceRaw;
 
     try {
+      // Pre-flight: the signer pays tx fee + rent for their USDC ATA
+      // (~0.002 SOL). Empty wallets hit a confusing System Program error
+      // ("Attempt to debit an account but found no record of a prior
+      // credit") with empty logs because the simulation can't even
+      // deduct fees. Surface a clear actionable message instead.
+      const lamports = await program.provider.connection.getBalance(
+        new PublicKey(address),
+      );
+      const MIN_LAMPORTS = 3_000_000; // ~0.003 SOL — covers ATA rent + fee + buffer
+      if (lamports < MIN_LAMPORTS) {
+        const have = (lamports / 1e9).toFixed(6);
+        const need = (MIN_LAMPORTS / 1e9).toFixed(3);
+        throw new Error(
+          `Insufficient SOL. Wallet has ${have} SOL, withdraw needs at least ${need} SOL for tx fee and ATA rent. Run: solana airdrop 1 ${address} --url devnet`,
+        );
+      }
+
       const sig = await withdraw(program, new PublicKey(address));
       setLastWithdrawTx(sig);
 
@@ -124,9 +141,24 @@ export default function UserDashboardPage() {
       toast.success("Withdrawal confirmed.");
       await refreshBalance();
     } catch (err) {
+      // Surface the actual on-chain reason instead of the generic
+      // "Simulation failed." line. SendTransactionError exposes
+      // `transactionLogs` — search for AnchorError, SPL Token errors
+      // ("custom program error" / "Program log: Error:"), and CPI failures.
       const message = err instanceof Error ? err.message : String(err);
-      setWithdrawError(message);
-      toast.error(`Withdraw failed: ${message.split("\n")[0]}`);
+      const logs: string[] | undefined =
+        (err as { transactionLogs?: string[] }).transactionLogs ??
+        (err as { logs?: string[] }).logs;
+      const programReason = logs?.find((l) =>
+        /AnchorError|Error Message|Program log: Error|insufficient funds|already in use|MintMismatch|owner does not match/i.test(
+          l,
+        ),
+      );
+      const display = programReason ?? message.split("\n")[0];
+      setWithdrawError(programReason ? `${display}\n\n${message}` : message);
+      toast.error(`Withdraw failed: ${display}`);
+      console.error("[user-dashboard] withdraw failed:", err);
+      if (logs) console.error("[user-dashboard] tx logs:", logs);
     } finally {
       setIsWithdrawing(false);
     }

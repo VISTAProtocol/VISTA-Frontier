@@ -276,3 +276,48 @@ create index if not exists campaigns_cctp_nonce_idx
 -- as the new source of truth.
 update public.campaigns set source_chain = 'solana-devnet'
   where source_chain is null;
+
+-- ─────────────────── Vault ledger (credits / withdrawals) ───────────────────
+-- Per-wallet ledger fed by vista_protocol StreamTick (Credited) and Withdrawn
+-- events. `getVaultBalance(wallet)` aggregates these for the user and
+-- publisher dashboards. role: 0 = user, 1 = publisher.
+
+create table if not exists public.vault_credits (
+  id uuid primary key default gen_random_uuid(),
+  wallet_address text not null,
+  session_id_onchain text not null,
+  campaign_id_onchain text not null,
+  amount numeric not null,
+  role smallint not null,
+  credited_at timestamptz not null default now()
+);
+
+create table if not exists public.vault_withdrawals (
+  id uuid primary key default gen_random_uuid(),
+  wallet_address text not null,
+  amount numeric not null,
+  withdrawn_at timestamptz not null default now()
+);
+
+create index if not exists idx_vault_credits_wallet
+  on public.vault_credits(wallet_address);
+create index if not exists idx_vault_credits_session
+  on public.vault_credits(session_id_onchain);
+create index if not exists idx_vault_withdrawals_wallet
+  on public.vault_withdrawals(wallet_address);
+
+alter table public.vault_credits enable row level security;
+alter table public.vault_withdrawals enable row level security;
+
+drop policy if exists "vault_credits_select_all" on public.vault_credits;
+drop policy if exists "vault_credits_insert_all" on public.vault_credits;
+create policy "vault_credits_select_all" on public.vault_credits for select using (true);
+create policy "vault_credits_insert_all" on public.vault_credits for insert with check (true);
+
+drop policy if exists "vault_withdrawals_select_all" on public.vault_withdrawals;
+drop policy if exists "vault_withdrawals_insert_all" on public.vault_withdrawals;
+create policy "vault_withdrawals_select_all" on public.vault_withdrawals for select using (true);
+create policy "vault_withdrawals_insert_all" on public.vault_withdrawals for insert with check (true);
+
+alter publication supabase_realtime add table public.vault_credits;
+alter publication supabase_realtime add table public.vault_withdrawals;

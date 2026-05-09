@@ -38,6 +38,7 @@ import {
 import { fetchJson } from "@/lib/http";
 import {
   claimRewards,
+  fetchOracleNode,
   registerOracle,
   unregisterOracle,
   withdrawStake,
@@ -135,6 +136,26 @@ export default function OracleDashboardPage() {
       toast.error("Endpoint URL is required.");
       return;
     }
+    // register_oracle uses Anchor `init` (not init_if_needed), so a second
+    // call with the same wallet collides with the existing oracle_node PDA
+    // and reverts with "Allocate: account already in use" / 0x0. Pre-flight
+    // the account read so we surface a clean message instead of a sim error.
+    try {
+      const existing = await fetchOracleNode(program!, new PublicKey(address!));
+      if (existing) {
+        if (existing.active) {
+          toast.info("Already registered as an active oracle.");
+          return;
+        }
+        toast.error(
+          "Oracle node PDA already exists but is unregistered — wait for the 7-day lockup, then call withdraw_stake before re-registering.",
+        );
+        return;
+      }
+    } catch {
+      // fall through — let the actual register call surface the error if any
+    }
+
     const sig = await withSpinner("register", async () =>
       registerOracle(program!, {
         oracle: new PublicKey(address!),
@@ -176,21 +197,27 @@ export default function OracleDashboardPage() {
         description="Stake USDC, run an oracle node, verify human attention on-chain. Honest validators earn 10% of every ad dollar; outliers get slashed."
       />
 
+      <SectionHeader
+        eyebrow="Network · all validators"
+        title="Oracle network overview"
+        description="Aggregate state across every registered VISTA oracle — not your node alone."
+      />
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          title="Active oracles"
+          title="Active oracles (network)"
           value={stats?.activeNodes ?? 0}
           icon={Network}
           format="number"
         />
         <StatCard
-          title="Total staked"
+          title="Total staked (network)"
           value={(stats?.totalStaked ?? 0) / 1_000_000}
           icon={Coins}
           format="usdc"
         />
         <StatCard
-          title="Sessions today"
+          title="Sessions today (network)"
           value={stats?.sessionsToday ?? 0}
           icon={Activity}
           format="number"
@@ -298,53 +325,60 @@ export default function OracleDashboardPage() {
       )}
 
       {node && (
-        <Card className="bg-card/90">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
-                <span
-                  className={`size-2 rounded-full ${node.active ? "bg-emerald-400" : "bg-muted-foreground"}`}
+        <>
+          <SectionHeader
+            eyebrow="Just this validator"
+            title="Your oracle node"
+            description={`On-chain state for the wallet you're connected with (${truncateAddress(node.oracle_pubkey)}). Every metric below is yours alone.`}
+          />
+
+          <Card className="border-primary/30 bg-card/90 ring-1 ring-primary/15">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <span
+                    className={`size-2 rounded-full ${node.active ? "bg-emerald-400" : "bg-muted-foreground"}`}
+                  />
+                  {node.active ? "Your active oracle node" : "Your inactive oracle node"}
+                </CardTitle>
+                <Badge variant={node.active ? "default" : "outline"}>
+                  {node.active ? "Online" : "Unregistered"}
+                </Badge>
+              </div>
+              <CardDescription className="font-mono text-xs">
+                {node.oracle_pubkey}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Stat
+                  label="Your stake"
+                  value={`${formatUsdc(node.stake_amount / 1_000_000)} USDC`}
                 />
-                {node.active ? "Active oracle node" : "Inactive oracle node"}
-              </CardTitle>
-              <Badge variant={node.active ? "default" : "outline"}>
-                {node.active ? "Online" : "Unregistered"}
-              </Badge>
-            </div>
-            <CardDescription className="font-mono text-xs">
-              {node.oracle_pubkey}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat
-                label="Stake"
-                value={`${formatUsdc(node.stake_amount / 1_000_000)} USDC`}
-              />
-              <Stat
-                label="Reward balance"
-                value={`${formatUsdc(node.reward_balance / 1_000_000)} USDC`}
-              />
-              <Stat
-                label="Sessions verified"
-                value={node.total_submissions.toString()}
-              />
-              <Stat
-                label="Total slashed"
-                value={`${formatUsdc(node.total_slashes / 1_000_000)} USDC`}
-              />
-              <Stat
-                label="Endpoint"
-                value={node.endpoint_url}
-                mono
-                className="sm:col-span-2"
-              />
-              <Stat label="Reputation" value={node.reputation.toString()} />
-              <Stat
-                label="Registered"
-                value={new Date(node.registered_at).toLocaleDateString()}
-              />
-            </div>
+                <Stat
+                  label="Your pending rewards"
+                  value={`${formatUsdc(node.reward_balance / 1_000_000)} USDC`}
+                />
+                <Stat
+                  label="Your sessions verified"
+                  value={node.total_submissions.toString()}
+                />
+                <Stat
+                  label="Your total slashed"
+                  value={`${formatUsdc(node.total_slashes / 1_000_000)} USDC`}
+                />
+                <Stat
+                  label="Your endpoint"
+                  value={node.endpoint_url}
+                  mono
+                  className="sm:col-span-2"
+                />
+                <Stat label="Your reputation" value={node.reputation.toString()} />
+                <Stat
+                  label="Registered"
+                  value={new Date(node.registered_at).toLocaleDateString()}
+                />
+              </div>
 
             <div className="flex flex-wrap gap-2">
               <Button
@@ -389,14 +423,16 @@ export default function OracleDashboardPage() {
             </div>
           </CardContent>
         </Card>
+        </>
       )}
 
       {node && submissions.length > 0 && (
-        <Card className="bg-card/90">
+        <Card className="border-primary/30 bg-card/90 ring-1 ring-primary/15">
           <CardHeader>
-            <CardTitle>Recent submissions</CardTitle>
+            <CardTitle>Your recent submissions</CardTitle>
             <CardDescription>
-              Last {submissions.length} verifications submitted by this oracle.
+              Last {submissions.length} verification{submissions.length === 1 ? "" : "s"} submitted by your oracle wallet
+              ({truncateAddress(address ?? "")}).
             </CardDescription>
           </CardHeader>
           <CardContent className="overflow-x-auto">
@@ -447,6 +483,28 @@ export default function OracleDashboardPage() {
           Wallet {truncateAddress(address ?? "")} not yet registered.
         </p>
       )}
+    </div>
+  );
+}
+
+function SectionHeader({
+  eyebrow,
+  title,
+  description,
+}: {
+  eyebrow: string;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1 border-l-2 border-primary/40 pl-3">
+      <span className="text-[0.65rem] font-medium uppercase tracking-[0.18em] text-primary/80">
+        {eyebrow}
+      </span>
+      <h2 className="text-base font-semibold leading-tight">{title}</h2>
+      {description ? (
+        <p className="text-xs text-muted-foreground">{description}</p>
+      ) : null}
     </div>
   );
 }

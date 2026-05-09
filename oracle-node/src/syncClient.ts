@@ -11,7 +11,13 @@ export type OracleSyncEvent =
   | { event: "cross_chain_evm_confirmed"; payload: Record<string, unknown> }
   | { event: "cross_chain_attested"; payload: Record<string, unknown> }
   | { event: "cross_chain_active"; payload: Record<string, unknown> }
-  | { event: "cross_chain_failed"; payload: Record<string, unknown> };
+  | { event: "cross_chain_failed"; payload: Record<string, unknown> }
+  | { event: "campaign_created"; payload: Record<string, unknown> }
+  | { event: "stream_started"; payload: Record<string, unknown> }
+  | { event: "stream_tick"; payload: Record<string, unknown> }
+  | { event: "stream_ended"; payload: Record<string, unknown> }
+  | { event: "receipt_minted"; payload: Record<string, unknown> }
+  | { event: "withdrawn"; payload: Record<string, unknown> };
 
 export class SyncClient {
   constructor(private readonly cfg: OracleConfig) {}

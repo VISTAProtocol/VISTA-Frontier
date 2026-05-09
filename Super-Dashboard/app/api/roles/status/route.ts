@@ -5,7 +5,7 @@ import { getRegistrationStatus } from "@/lib/data"
 import type { RoleName } from "@/lib/types"
 
 const querySchema = z.object({
-  role: z.enum(["advertiser", "publisher", "user"]),
+  role: z.enum(["advertiser", "publisher", "user", "oracle"]),
   wallet: z.string().min(6),
 })
 

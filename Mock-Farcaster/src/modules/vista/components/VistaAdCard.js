@@ -75,10 +75,8 @@ export function VistaAdCard({ campaign, userWallet, onEarn }) {
       Vista.init({
         apiKey: process.env.NEXT_PUBLIC_VISTA_API_KEY,
         userWallet,
-        oracleUrl: process.env.NEXT_PUBLIC_VISTA_ORACLE_URL,
         dashboardUrl: process.env.NEXT_PUBLIC_VISTA_DASHBOARD_URL,
         campaignId: campaign.campaign_id_onchain,
-        publisherWallet: process.env.NEXT_PUBLIC_VISTA_PUBLISHER_WALLET,
       });
       Vista.attachZone(adId);
       Vista.onEarn((data) => {

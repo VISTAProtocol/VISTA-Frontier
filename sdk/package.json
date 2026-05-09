@@ -18,7 +18,7 @@
     "dev": "tsup --watch",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["web3", "attention", "usdc", "advertising", "base"],
+  "keywords": ["web3", "attention", "usdc", "advertising", "solana", "anchor", "real-time-payments"],
   "license": "MIT",
   "devDependencies": {
     "tsup": "^8.0.0",

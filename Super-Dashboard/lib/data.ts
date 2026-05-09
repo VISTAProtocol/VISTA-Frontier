@@ -777,9 +777,16 @@ export async function createCampaign(input: {
     throw new Error("Supabase client is not configured");
   }
 
+  // Race condition: advertiser launches campaign → on-chain deposit_campaign
+  // emits CampaignCreated → oracle eventListener forwards to /api/oracle/sync
+  // → applyOracleSyncEvent upserts a placeholder row ("(synced from chain)")
+  // BEFORE the frontend gets to POST /api/campaigns. A plain .insert() would
+  // collide on `campaign_id_onchain`. Upsert + onConflict lets the
+  // advertiser-supplied fields (title, creative, targeting) overwrite the
+  // placeholder — the sync handler's row is just a stub anyway.
   const { data, error } = await supabase
     .from("campaigns")
-    .insert(payload)
+    .upsert(payload, { onConflict: "campaign_id_onchain" })
     .select("*")
     .single();
 

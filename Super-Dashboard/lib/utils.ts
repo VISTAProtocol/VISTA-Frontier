@@ -10,8 +10,22 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/**
+ * Normalize a wallet address for storage / equality comparison.
+ *
+ * IMPORTANT: this used to lowercase the input — correct for EVM (where
+ * 0x… is case-insensitive hex), but FATAL for Solana where base58 pubkeys
+ * are case-sensitive. Lowercasing `AZ8nJSfM…` produced a totally different
+ * 32-byte sequence, which silently broke every PDA derivation downstream:
+ * tick_stream credited funds to phantom `publisher_balance`/`user_balance`
+ * PDAs, withdraw failed the `user_balance.wallet == beneficiary` constraint,
+ * and dashboards couldn't match writes back to the connected wallet.
+ *
+ * Now: trim only. EVM addresses are unchanged too — equality over EVM
+ * addresses should be lowercased at the specific call site if needed.
+ */
 export function normalizeWallet(address?: string | null) {
-  return address?.trim().toLowerCase() ?? "";
+  return address?.trim() ?? "";
 }
 
 export function safeNumber(value?: string | number | null): number {
