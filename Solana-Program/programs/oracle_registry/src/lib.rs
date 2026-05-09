@@ -5,7 +5,7 @@ declare_id!("Arf7oEFm7jjaUXYW8of4moy553kczWXxdtf1bDSRpynn");
 
 // Same canonical USDC mint used by vista_protocol on devnet.
 #[constant]
-pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+pub const USDC_MINT: Pubkey = pubkey!("2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm");
 
 // Default minimum stake (100 USDC, 6 decimals).
 pub const DEFAULT_MIN_STAKE: u64 = 100_000_000;

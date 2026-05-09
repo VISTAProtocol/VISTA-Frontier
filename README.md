@@ -4,7 +4,7 @@
 
 Vista is a decentralized advertising infrastructure that enables users to earn USDC in real-time simply by viewing content. By leveraging Solana's high-throughput, low-latency runtime and advanced attention-tracking technology, we create a fair and transparent ecosystem for Advertisers, Publishers, and Users.
 
-**Settlement token**: Circle's official test USDC on Solana **devnet** (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`). Get test USDC from [faucet.circle.com](https://faucet.circle.com).
+**Settlement token**: VISTA test USDC on Solana **devnet** (`2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm`) — a custom SPL mint used for the hackathon. Ask the team for test funding, or mint via the SPL CLI if you control the mint authority.
 
 ## 🚀 Live Demos
 

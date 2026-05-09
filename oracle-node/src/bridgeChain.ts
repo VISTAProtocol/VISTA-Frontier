@@ -13,7 +13,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { OracleConfig } from "./config.js";
 
 const USDC_MINT = new PublicKey(
-  process.env.USDC_MINT ?? "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  process.env.USDC_MINT ?? "2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm",
 );
 
 function disc(name: string): Buffer {

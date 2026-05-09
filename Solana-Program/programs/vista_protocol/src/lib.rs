@@ -8,7 +8,7 @@ declare_id!("4Jp9E68gcEMUXTwtm7suQ5wKq6U9jDRK4KPuRs6fReCM");
 // subsequent instructions enforce it. For mainnet, swap this constant.
 // Faucet: https://faucet.circle.com (select Solana devnet, USDC).
 #[constant]
-pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+pub const USDC_MINT: Pubkey = pubkey!("2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm");
 
 // Revenue split (out of 100). VISTA fee = 100 - USER_PCT - PUBLISHER_PCT - VALIDATOR_PCT,
 // computed as remainder so integer-division dust is absorbed by the protocol.

@@ -7,7 +7,7 @@
  * Required env (override defaults):
  *   ANCHOR_PROVIDER_URL        — RPC URL (default: https://api.devnet.solana.com)
  *   ANCHOR_WALLET              — admin keypair path (default: ~/.config/solana/id.json)
- *   USDC_MINT                  — USDC mint pubkey (default: Circle devnet USDC)
+ *   USDC_MINT                  — USDC mint pubkey (default: VISTA hackathon devnet mint)
  *   ORACLE_PUBKEY              — oracle signer pubkey (REQUIRED)
  *   VISTA_WALLET_PUBKEY        — protocol fee recipient (REQUIRED)
  *   VISTA_PROTOCOL_PROGRAM_ID  — program id (default: from Anchor.toml synced value)
@@ -40,7 +40,7 @@ import type { VistaProtocol } from "../target/types/vista_protocol";
 const DEFAULTS = {
   RPC: "https://api.devnet.solana.com",
   WALLET: path.join(os.homedir(), ".config/solana/id.json"),
-  USDC_MINT: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  USDC_MINT: "2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm",
   PROGRAM_ID: "4Jp9E68gcEMUXTwtm7suQ5wKq6U9jDRK4KPuRs6fReCM",
 };
 

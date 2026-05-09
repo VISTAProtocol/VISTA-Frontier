@@ -2055,7 +2055,7 @@ export type VistaProtocol = {
     {
       "name": "usdcMint",
       "type": "pubkey",
-      "value": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+      "value": "2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm"
     }
   ]
 };

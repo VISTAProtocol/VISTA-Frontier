@@ -8,7 +8,7 @@ declare_id!("9R7UWcCQVXW4dKKLYLLRfGQf5prePQBMyTEwd2TMC8sE");
 // by this program; tick payouts then move that USDC into vista_protocol's
 // shared user_vault token account (which is *also* USDC, so no mint mismatch).
 #[constant]
-pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+pub const USDC_MINT: Pubkey = pubkey!("2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm");
 
 // Mirror vista_protocol's revenue split exactly. Keeping these in sync is
 // load-bearing — if vista_protocol changes its split, this must follow.

@@ -11,7 +11,7 @@
  *   ANCHOR_WALLET        — admin keypair path (default ~/.config/solana/id.json)
  *   ORACLE_PUBKEY        — REQUIRED. Oracle node's pubkey (also used as LZ executor)
  *   VISTA_WALLET_PUBKEY  — REQUIRED. Protocol fee recipient pubkey
- *   USDC_MINT            — default Circle devnet USDC
+ *   USDC_MINT            — default VISTA hackathon devnet mint
  *
  * Usage:
  *   ORACLE_PUBKEY=<pk> VISTA_WALLET_PUBKEY=<pk> \
@@ -36,7 +36,7 @@ const PROGRAM_ID = new PublicKey(
   "9R7UWcCQVXW4dKKLYLLRfGQf5prePQBMyTEwd2TMC8sE",
 );
 const USDC_MINT = new PublicKey(
-  process.env.USDC_MINT ?? "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  process.env.USDC_MINT ?? "2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm",
 );
 
 function disc(name: string): Buffer {

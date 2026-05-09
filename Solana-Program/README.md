@@ -42,13 +42,13 @@ Both programs run side-by-side: users transact directly on Solana via `vista_pro
 
 ## Settlement token
 
-Vista uses **Circle's official test USDC on Solana devnet**. The mint address is hardcoded in `vista_protocol`:
+Vista uses a **custom test USDC SPL mint on Solana devnet** for the hackathon. The mint address is referenced in `vista_protocol` as a documentation constant (the runtime check is against `config.usdc_mint`, set at `initialize`):
 
 ```
-USDC_MINT = 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+USDC_MINT = 2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm
 ```
 
-`initialize` rejects any other mint via the `WrongMint` constraint, so the program is locked to USDC by design. To migrate to mainnet, swap the constant in [`programs/vista_protocol/src/lib.rs`](programs/vista_protocol/src/lib.rs) for the real USDC mint (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`) and rebuild.
+To migrate to mainnet, re-`initialize` the protocol with the real USDC mint (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`) and update the constant in [`programs/vista_protocol/src/lib.rs`](programs/vista_protocol/src/lib.rs) to keep source aligned.
 
 ### Getting test USDC
 
@@ -66,7 +66,7 @@ The Solidity protocol used four contracts (`VistaEscrow`, `VistaStream`, `VistaV
 
 Concrete mappings:
 
-- ERC-20 `MockUSDC` → Circle's devnet USDC mint (no Rust port needed; SPL Token Program handles transfer/approve/etc).
+- ERC-20 `MockUSDC` → custom devnet SPL mint (no Rust port needed; SPL Token Program handles transfer/approve/etc).
 - `bytes32 campaignId` / `sessionId` → `[u8; 32]` (still derived off-chain by the Oracle).
 - ERC-1155 soulbound receipt → `Receipt` PDA. PDAs cannot be transferred between owners, so soulbound semantics are intrinsic. To upgrade to a real NFT, swap the PDA for a Metaplex Core asset with the non-transferable extension.
 - Solidity events → Anchor `#[event]` (emitted via `emit!`); the indexer reads program logs.
@@ -102,7 +102,7 @@ Defaults (override via env):
 |---|---|
 | `ANCHOR_PROVIDER_URL` | `https://api.devnet.solana.com` |
 | `ANCHOR_WALLET` | `~/.config/solana/id.json` |
-| `USDC_MINT` | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` (Circle devnet USDC) |
+| `USDC_MINT` | `2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm` (VISTA hackathon devnet mint) |
 | `VISTA_PROTOCOL_PROGRAM_ID` | synced devnet program id |
 | `ORACLE_PUBKEY` | **required** |
 | `VISTA_WALLET_PUBKEY` | **required** |

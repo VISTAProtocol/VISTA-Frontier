@@ -46,12 +46,11 @@ export const ATTENTION_AGGREGATOR_PROGRAM_ID = new PublicKey(
   ),
 );
 
-// Circle's official test USDC mint on Solana devnet.
-// Faucet: https://faucet.circle.com (Solana, devnet)
+// VISTA test USDC mint on Solana devnet (custom SPL mint, hackathon-only).
 export const USDC_MINT = new PublicKey(
   envStr(
     process.env.NEXT_PUBLIC_USDC_MINT,
-    "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    "2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm",
   ),
 );
 
