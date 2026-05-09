@@ -5,14 +5,14 @@
  * eventListener payload schema was wrong.
  *
  * Usage:
- *   ORACLE_KEYPAIR_PATH=./local-oracles/oracle_1.json \
+ *   ORACLE_KEYPAIR_JSON="$(cat ./local-oracles/oracle_1.json)" \
  *   DASHBOARD_URL=http://localhost:3031 \
  *   ORACLE_WEBHOOK_SECRET=supersecret \
  *   RPC_URL=https://api.devnet.solana.com \
  *     npx tsx scripts/backfill-registered.ts
  *
- * Reads ORACLE_KEYPAIR_PATH only to satisfy the existing config loader; the
- * registered keypair itself is irrelevant — we walk all OracleNode accounts
+ * Reads ORACLE_KEYPAIR_JSON only to satisfy the existing config loader; the
+ * loaded keypair itself is irrelevant — we walk all OracleNode accounts
  * owned by the oracle_registry program ID.
  */
 import { Connection, PublicKey } from "@solana/web3.js";
