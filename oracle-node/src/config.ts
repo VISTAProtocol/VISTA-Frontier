@@ -49,19 +49,14 @@ function readConfig(): RawConfig {
   return JSON.parse(raw);
 }
 
-function loadKeypair(envPath?: string): Keypair {
-  // Prefer inline JSON env (portable on PaaS like Render/Railway where
-  // mounting files is awkward). Falls back to a path on disk.
+function loadKeypair(): Keypair {
   const inline = process.env.ORACLE_KEYPAIR_JSON?.trim();
-  if (inline) {
-    const secret = JSON.parse(inline);
-    return Keypair.fromSecretKey(Uint8Array.from(secret));
+  if (!inline) {
+    throw new Error(
+      "ORACLE_KEYPAIR_JSON env var is required (raw secret key as JSON array)",
+    );
   }
-  const keypairPath = envPath ?? process.env.ORACLE_KEYPAIR_PATH ?? "./keypair.json";
-  const resolved = path.isAbsolute(keypairPath)
-    ? keypairPath
-    : path.resolve(process.cwd(), keypairPath);
-  const secret = JSON.parse(fs.readFileSync(resolved, "utf-8"));
+  const secret = JSON.parse(inline);
   return Keypair.fromSecretKey(Uint8Array.from(secret));
 }
 

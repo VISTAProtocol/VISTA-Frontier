@@ -1,4 +1,13 @@
 import { createHash } from "node:crypto";
+import process from "node:process";
+
+// Local-dev convenience: load `.env` if present. In prod (Render/Railway/Docker)
+// env vars come from the platform, so `.env` won't exist and we silently skip.
+try {
+  process.loadEnvFile(".env");
+} catch {
+  // no .env file — fine, env vars expected from the runtime
+}
 
 import express from "express";
 import { z } from "zod";
