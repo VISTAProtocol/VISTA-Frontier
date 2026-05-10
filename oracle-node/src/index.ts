@@ -69,23 +69,93 @@ async function main() {
   eventListener.start();
 
   // ─── Cross-chain advertiser deposit pipeline ────────────────────────────
+  // Only one instance — the bridge relayer — is allowed to call
+  // receive_campaign_metadata / confirm_usdc_received. The on-chain program
+  // gates this on `bridge_config.lz_executor_authority`. If this instance is
+  // configured for cross-chain (VISTA_GATEWAY_* set) but its keypair doesn't
+  // match the on-chain authority, refuse to boot — running anyway would burn
+  // a poll cycle then fail every EVM event with NotLzExecutor (0x1777).
   const bridge = new BridgeChainClient(cfg);
+  if (cfg.crossChain.enabled) {
+    const onChainAuthority = await bridge.fetchLzExecutorAuthority();
+    if (!cfg.keypair.publicKey.equals(onChainAuthority)) {
+      console.error(
+        `[bridge] FATAL: cross-chain is enabled (VISTA_GATEWAY_* set) but this\n` +
+          `        oracle's keypair (${cfg.keypair.publicKey.toBase58()})\n` +
+          `        does NOT match bridge_config.lz_executor_authority\n` +
+          `        (${onChainAuthority.toBase58()}).\n` +
+          `        Either run this instance as an attention-only oracle by\n` +
+          `        clearing VISTA_GATEWAY_BASE_SEPOLIA / VISTA_GATEWAY_ARB_SEPOLIA,\n` +
+          `        or use the bridge-relayer keypair (see oracle-node/.env).`,
+      );
+      process.exit(1);
+    }
+    console.log(
+      `[bridge] keypair matches lz_executor_authority — running as bridge relayer.`,
+    );
+
+    // Arsitektur 2: relayer also has to be the mint authority for the
+    // VISTA-side USDC, because once Circle has attested the EVM-side burn
+    // we mint the equivalent supply on Solana ourselves. If this isn't true,
+    // mintUsdcToVault would fail every time with `OwnerMismatch` after a
+    // 13-19 minute attestation wait — fail fast at startup instead.
+    const mintAuthority = await bridge.fetchMintAuthority();
+    if (!mintAuthority || !cfg.keypair.publicKey.equals(mintAuthority)) {
+      console.error(
+        `[bridge] FATAL: relayer keypair (${cfg.keypair.publicKey.toBase58()})\n` +
+          `        is NOT the mint authority for bridge_config.usdc_mint\n` +
+          `        (current authority: ${mintAuthority?.toBase58() ?? "<frozen / renounced>"}).\n` +
+          `        Arsitektur 2 needs the relayer to mint the Solana-side\n` +
+          `        equivalent of the EVM-burned USDC. Either transfer mint\n` +
+          `        authority to this key, or switch to a different design.`,
+      );
+      process.exit(1);
+    }
+    console.log(
+      `[bridge] keypair is also the USDC mint authority — Arsitektur 2 ready.`,
+    );
+  } else {
+    console.log(
+      `[bridge] cross-chain disabled (no VISTA_GATEWAY_* env) — attention-only oracle.`,
+    );
+  }
   const cctp = new CctpWatcher(cfg, sync);
   cctp.setOnAttested(async (job) => {
-    // CCTP attestation is ready. The Solana side requires:
-    //   1. MessageTransmitter.receive_message — Circle's CCTP receiver
-    //      program mints USDC into the per-campaign vault PDA. This is
-    //      submitted by ANY caller (Circle's program is permissionless),
-    //      and requires the raw `message` + `attestation` bytes returned by
-    //      Iris. For the hackathon this submission is left to the operator
-    //      (e.g. via Circle's CCTP UI / `solana-cli`); see README.
-    //   2. vista_bridge.confirm_usdc_received — once USDC has landed in
-    //      the vault, this flips `is_active=true`. Permissionless; we call
-    //      it as the oracle so the dashboard moves to `bridge_status=active`.
+    // Arsitektur 2 finalization on Solana once Circle Iris has attested the
+    // EVM-side burn:
+    //   1. mintUsdcToVault — relayer is the mint authority, so it issues the
+    //      Solana-side USDC equivalent of the EVM-burned amount directly into
+    //      the per-campaign vault PDA. Idempotent: if vault.amount already
+    //      covers total_budget (e.g. relayer crashed mid-flow + restart), we
+    //      skip straight to confirm.
+    //   2. vista_bridge.confirm_usdc_received — flips is_active=true once the
+    //      vault holds at least total_budget. Permissionless; relayer calls it
+    //      so the dashboard moves to bridge_status=active.
+    const campaignBuf = Buffer.from(job.campaignId.slice(2), "hex");
     try {
-      const sig = await bridge.submitConfirmUsdcReceived(
-        Buffer.from(job.campaignId.slice(2), "hex"),
-      );
+      const have = await bridge.fetchVaultAmount(campaignBuf);
+      if (have < job.totalBudget) {
+        const need = job.totalBudget - have;
+        const mintSig = await bridge.mintUsdcToVault(campaignBuf, need);
+        console.log(
+          `[bridge] mint_to vault campaign=${job.campaignId} amount=${need} (have=${have} need=${job.totalBudget}) tx=${mintSig}`,
+        );
+        await sync.post({
+          event: "cross_chain_minted",
+          payload: {
+            campaign_id_onchain: job.campaignId,
+            mint_tx: mintSig,
+            minted_amount_raw: need.toString(),
+            minted_at: new Date().toISOString(),
+          },
+        });
+      } else {
+        console.log(
+          `[bridge] vault already funded for ${job.campaignId} (have=${have} >= ${job.totalBudget}); skipping mint`,
+        );
+      }
+
+      const sig = await bridge.submitConfirmUsdcReceived(campaignBuf);
       console.log(
         `[bridge] confirm_usdc_received campaign=${job.campaignId} tx=${sig}`,
       );
@@ -99,14 +169,14 @@ async function main() {
       });
     } catch (err) {
       console.warn(
-        `[bridge] confirm_usdc_received failed for ${job.campaignId} — vault probably hasn't received CCTP mint yet. Operator needs to run MessageTransmitter.receive_message.`,
+        `[bridge] finalization failed for ${job.campaignId}:`,
         err,
       );
       await sync.post({
         event: "cross_chain_failed",
         payload: {
           campaign_id_onchain: job.campaignId,
-          stage: "confirm_usdc_received",
+          stage: "mint_or_confirm",
           error: err instanceof Error ? err.message : String(err),
         },
       });
@@ -269,40 +339,68 @@ async function main() {
           if (msg.includes("already in use") || msg.includes("Allocate")) {
             streamStarted.add(sid);
           } else {
+            const logs =
+              (err as { transactionLogs?: string[] }).transactionLogs ??
+              (err as { logs?: string[] }).logs ??
+              [];
             console.warn(`[stream-cranker] start_stream failed for ${sid}:`, msg);
+            if (logs.length > 0) {
+              const programReason = logs.find((l: string) =>
+                /AnchorError|Error Message|Error:/i.test(l),
+              );
+              if (programReason) console.warn("  on-chain:", programReason);
+              // Campaign PDA missing = the dashboard is serving a campaign
+              // whose Solana side hasn't been deposited yet (cross-chain
+              // bridge incomplete, or native deposit_campaign tx never
+              // landed). The fix is at the campaign level, not retry —
+              // log it loud so it isn't mistaken for a flaky RPC.
+              if (logs.some((l) => /caused by account: campaign/i.test(l))) {
+                console.warn(
+                  `  → campaign ${meta.campaignId} has no Solana PDA. Either the cross-chain bridge isn't complete (bridge_status != 'solana_minted'/'active'/'native') or deposit_campaign failed. Re-deposit or wait for confirm_usdc_received.`,
+                );
+              }
+            }
           }
         }
       }
 
       // tick_stream — runs every window with `windowSeconds` worth of elapsed
       // viewing time. This is what actually moves USDC from the campaign
-      // vault into the user/publisher escrow PDAs.
-      try {
-        const sig = await chain.tickStream({
-          sessionId: sessionIdBuf,
-          campaignId: campaignIdBuf,
-          userWallet: userPk,
-          publisherWallet: publisherPk,
-          vistaWallet: vistaCfg.vistaWallet,
-          usdcMint: vistaCfg.usdcMint,
-          secondsElapsed: cfg.windowSeconds,
-        });
-        console.log(`[stream-cranker] tick_stream ${sid} tx=${sig}`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const logs =
-          (err as { transactionLogs?: string[] }).transactionLogs ??
-          (err as { logs?: string[] }).logs ??
-          [];
-        console.warn(`[stream-cranker] tick_stream failed for ${sid}:`, msg);
-        // Surface the actual on-chain reason so this isn't a black box —
-        // common causes: campaign budget exhausted, advertiser_token empty,
-        // or campaign.active=false after a previous tick zeroed the budget.
-        if (logs.length > 0) {
-          const programReason = logs.find((l: string) =>
-            /AnchorError|Error Message|Error:/i.test(l),
-          );
-          if (programReason) console.warn("  on-chain:", programReason);
+      // vault into the user/publisher escrow PDAs. Skipped when the session
+      // PDA isn't known-initialized — otherwise we'd hit AccountNotInitialized
+      // (0xbc4) on every tick until start_stream finally succeeds.
+      if (!streamStarted.has(sid)) {
+        console.warn(
+          `[stream-cranker] skip tick_stream ${sid}: session not initialized yet (start_stream pending/failed)`,
+        );
+      } else {
+        try {
+          const sig = await chain.tickStream({
+            sessionId: sessionIdBuf,
+            campaignId: campaignIdBuf,
+            userWallet: userPk,
+            publisherWallet: publisherPk,
+            vistaWallet: vistaCfg.vistaWallet,
+            usdcMint: vistaCfg.usdcMint,
+            secondsElapsed: cfg.windowSeconds,
+          });
+          console.log(`[stream-cranker] tick_stream ${sid} tx=${sig}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const logs =
+            (err as { transactionLogs?: string[] }).transactionLogs ??
+            (err as { logs?: string[] }).logs ??
+            [];
+          console.warn(`[stream-cranker] tick_stream failed for ${sid}:`, msg);
+          // Surface the actual on-chain reason so this isn't a black box —
+          // common causes: campaign budget exhausted, advertiser_token empty,
+          // or campaign.active=false after a previous tick zeroed the budget.
+          if (logs.length > 0) {
+            const programReason = logs.find((l: string) =>
+              /AnchorError|Error Message|Error:/i.test(l),
+            );
+            if (programReason) console.warn("  on-chain:", programReason);
+          }
         }
       }
     }

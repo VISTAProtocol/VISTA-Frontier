@@ -57,3 +57,16 @@ set -a && source local-oracles/oracle_2.env && set +a && npm run dev
 # Terminal 3
 
 set -a && source local-oracles/oracle_3.env && set +a && npm run dev
+
+# Terminal 1 — Bridge relayer (port 4000, key FRTMLy9...)
+
+cd oracle-node && set -a && source .env && set +a && npm run dev
+
+Flow cross-chain seharusnya:
+
+1. initiated ← Anda submit deposit di EVM (Base/Arb Sepolia)
+2. evm_confirmed ← oracle evmWatcher dengar event CampaignBridged dan POST ke
+   dashboard
+3. cctp_attested ← oracle cctpWatcher dapat attestation dari Circle Iris
+4. solana_minted ← oracle relay receive_campaign_metadata + confirm_usdc_received
+   ke Solana → PDA Campaign baru dibuat di sini

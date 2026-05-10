@@ -8,17 +8,24 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  createMintToInstruction,
+  getAccount,
+  getMint,
+  TokenAccountNotFoundError,
+} from "@solana/spl-token";
 
 import type { OracleConfig } from "./config.js";
-
-const USDC_MINT = new PublicKey(
-  process.env.USDC_MINT ?? "2qpAkwCARH6EL39VjeNTwupQXhbYCoJkZcoDE2wPYSJm",
-);
 
 function disc(name: string): Buffer {
   return createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
 }
+
+/// BridgeConfig layout (Anchor):
+/// disc(8) | admin(32) | usdc_mint(32) | oracle(32) | vista_wallet(32) | lz_executor_authority(32) | bump(1)
+const BRIDGE_CONFIG_USDC_MINT_OFFSET = 8 + 32;
+const BRIDGE_CONFIG_LZ_EXECUTOR_OFFSET = 8 + 32 + 32 + 32 + 32; // 136
 
 const RECEIVE_CAMPAIGN_METADATA_DISC = disc("receive_campaign_metadata");
 const CONFIRM_USDC_RECEIVED_DISC = disc("confirm_usdc_received");
@@ -41,6 +48,7 @@ export class BridgeChainClient {
   readonly keypair: Keypair;
   readonly programId: PublicKey;
   readonly bridgeConfigPda: PublicKey;
+  private cachedUsdcMint: PublicKey | null = null;
 
   constructor(private readonly cfg: OracleConfig) {
     this.connection = new Connection(cfg.rpcUrl, "confirmed");
@@ -49,6 +57,59 @@ export class BridgeChainClient {
     [this.bridgeConfigPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("bridge_config")],
       this.programId,
+    );
+  }
+
+  /// Read `bridge_config.usdc_mint` directly from chain — the program's
+  /// `address = bridge_config.usdc_mint` constraint will reject any other
+  /// mint, so authoritatively sourcing it here eliminates the entire
+  /// "env var got out of sync with on-chain config" failure mode (which
+  /// is what causes ConstraintAddress 0x7dc / 2012 on the usdc_mint slot).
+  /// Cached after first read; bridge_config.usdc_mint is immutable today.
+  async fetchBridgeUsdcMint(): Promise<PublicKey> {
+    if (this.cachedUsdcMint) return this.cachedUsdcMint;
+    const info = await this.connection.getAccountInfo(this.bridgeConfigPda);
+    if (!info) {
+      throw new Error(
+        `bridge_config PDA ${this.bridgeConfigPda.toBase58()} not found — vista_bridge isn't initialized on this cluster.`,
+      );
+    }
+    if (info.data.length < BRIDGE_CONFIG_USDC_MINT_OFFSET + 32) {
+      throw new Error(
+        `bridge_config account too small (${info.data.length} bytes) — layout mismatch?`,
+      );
+    }
+    this.cachedUsdcMint = new PublicKey(
+      info.data.subarray(
+        BRIDGE_CONFIG_USDC_MINT_OFFSET,
+        BRIDGE_CONFIG_USDC_MINT_OFFSET + 32,
+      ),
+    );
+    return this.cachedUsdcMint;
+  }
+
+  /// Read `bridge_config.lz_executor_authority` directly from chain. Used by
+  /// the startup guard to fail-fast if this oracle instance is configured for
+  /// cross-chain relaying but its keypair doesn't match the on-chain authority
+  /// — otherwise the mismatch only surfaces as NotLzExecutor (0x1777) on the
+  /// first EVM event, after a full poll cycle has burned.
+  async fetchLzExecutorAuthority(): Promise<PublicKey> {
+    const info = await this.connection.getAccountInfo(this.bridgeConfigPda);
+    if (!info) {
+      throw new Error(
+        `bridge_config PDA ${this.bridgeConfigPda.toBase58()} not found — vista_bridge isn't initialized on this cluster.`,
+      );
+    }
+    if (info.data.length < BRIDGE_CONFIG_LZ_EXECUTOR_OFFSET + 32) {
+      throw new Error(
+        `bridge_config account too small (${info.data.length} bytes) — layout mismatch?`,
+      );
+    }
+    return new PublicKey(
+      info.data.subarray(
+        BRIDGE_CONFIG_LZ_EXECUTOR_OFFSET,
+        BRIDGE_CONFIG_LZ_EXECUTOR_OFFSET + 32,
+      ),
     );
   }
 
@@ -100,6 +161,8 @@ export class BridgeChainClient {
       u64Le(p.cctpNonce),
     ]);
 
+    const usdcMint = await this.fetchBridgeUsdcMint();
+
     const ix = new TransactionInstruction({
       programId: this.programId,
       keys: [
@@ -110,7 +173,7 @@ export class BridgeChainClient {
         { pubkey: this.campaignPda(p.campaignId), isSigner: false, isWritable: true },
         { pubkey: this.vaultAuthorityPda(p.campaignId), isSigner: false, isWritable: false },
         { pubkey: this.vaultPda(p.campaignId), isSigner: false, isWritable: true },
-        { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+        { pubkey: usdcMint, isSigner: false, isWritable: false },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
@@ -118,6 +181,58 @@ export class BridgeChainClient {
       data,
     });
 
+    return this.send(ix);
+  }
+
+  /// Returns the on-chain mint authority for `bridge_config.usdc_mint`. Used
+  /// at startup to verify the relayer keypair can actually mint into the
+  /// per-campaign vault (Arsitektur 2). Returns null if the mint has been
+  /// frozen / authority renounced.
+  async fetchMintAuthority(): Promise<PublicKey | null> {
+    const usdcMint = await this.fetchBridgeUsdcMint();
+    const mint = await getMint(this.connection, usdcMint, "confirmed");
+    return mint.mintAuthority;
+  }
+
+  /// Read current USDC balance held by the per-campaign vault PDA. Returns 0n
+  /// if the account doesn't exist yet (e.g. before receive_campaign_metadata
+  /// landed). Used to make `mintUsdcToVault` idempotent: re-running the same
+  /// attestation must not double-mint after a relayer restart.
+  async fetchVaultAmount(campaignId: Buffer): Promise<bigint> {
+    const vault = this.vaultPda(campaignId);
+    try {
+      const acct = await getAccount(this.connection, vault, "confirmed");
+      return acct.amount;
+    } catch (err) {
+      if (err instanceof TokenAccountNotFoundError) return 0n;
+      throw err;
+    }
+  }
+
+  /// Arsitektur 2: once Circle Iris has attested the EVM-side CCTP burn, we
+  /// treat that as proof of finality and mint the equivalent supply of VISTA's
+  /// Solana-side USDC mint into the per-campaign vault. The relayer keypair
+  /// must be the mint authority for `bridge_config.usdc_mint` (verified at
+  /// startup; today this is FRTMLy9... = lz_executor_authority = mint
+  /// authority of the custom VISTA hackathon mint 2qpAkw...).
+  ///
+  /// Idempotent: callers should check `fetchVaultAmount` first and skip if
+  /// vault already holds >= total_budget.
+  async mintUsdcToVault(
+    campaignId: Buffer,
+    amount: bigint,
+  ): Promise<string> {
+    if (amount <= 0n) {
+      throw new Error(`mintUsdcToVault: amount must be > 0, got ${amount}`);
+    }
+    const usdcMint = await this.fetchBridgeUsdcMint();
+    const vault = this.vaultPda(campaignId);
+    const ix = createMintToInstruction(
+      usdcMint,
+      vault,
+      this.keypair.publicKey,
+      amount,
+    );
     return this.send(ix);
   }
 

@@ -11,6 +11,13 @@ import type { EvmChainConfig, OracleConfig } from "./config.js";
 import type { SyncClient } from "./syncClient.js";
 import type { CctpWatcher } from "./cctpWatcher.js";
 
+/// Bounded chunk size to keep within RPC `eth_getLogs` block-range caps.
+/// Alchemy free tier caps at 10 blocks per request (Arbitrum Sepolia is
+/// the strictest). Public RPCs vary widely. 10 is the safe lower bound;
+/// the polling loop handles multi-chunk catch-up automatically.
+const MAX_BLOCK_RANGE = 10n;
+const POLL_INTERVAL_MS = 8_000;
+
 /// Event signature must stay in sync with VistaGateway.sol's CampaignBridged.
 const VISTA_GATEWAY_ABI = parseAbi([
   "event CampaignBridged(bytes32 indexed campaignId, address indexed advertiser, uint256 totalBudget, uint64 ratePerSecond, uint64 duration, uint64 cctpNonce, uint32 sourceChainId, bytes32 solanaCampaignVault)",
@@ -37,9 +44,10 @@ export interface BridgedCampaign {
 ///   3. Hand off to CctpWatcher to poll Circle Iris for the attestation
 export class EvmChainWatcher {
   private readonly client: PublicClient;
-  private unwatch?: () => void;
-  private fromBlock?: bigint;
+  private timer?: NodeJS.Timeout;
+  private nextBlock: bigint = 0n;
   private retryDelayMs = 5_000;
+  private stopped = false;
 
   constructor(
     private readonly cfg: OracleConfig,
@@ -58,38 +66,68 @@ export class EvmChainWatcher {
 
   async start(): Promise<void> {
     try {
-      this.fromBlock = await this.client.getBlockNumber();
+      this.nextBlock = await this.client.getBlockNumber();
       console.log(
-        `[evm-watcher:${this.chain.key}] watching VistaGateway ${this.chain.vistaGateway} from block ${this.fromBlock}`,
+        `[evm-watcher:${this.chain.key}] watching VistaGateway ${this.chain.vistaGateway} from block ${this.nextBlock} (poll ${POLL_INTERVAL_MS}ms via eth_getLogs)`,
       );
     } catch (err) {
       console.warn(
         `[evm-watcher:${this.chain.key}] getBlockNumber failed, retrying:`,
         err,
       );
-      setTimeout(() => this.start(), this.retryDelayMs);
+      setTimeout(() => {
+        if (!this.stopped) this.start();
+      }, this.retryDelayMs);
       return;
     }
 
-    this.unwatch = this.client.watchContractEvent({
-      address: this.chain.vistaGateway,
-      abi: VISTA_GATEWAY_ABI,
-      eventName: "CampaignBridged",
-      onLogs: (logs) => this.handleLogs(logs).catch((err) => {
-        console.error(`[evm-watcher:${this.chain.key}] handleLogs error:`, err);
-      }),
-      onError: (err) => {
+    // Plain getLogs polling. Public RPCs like sepolia.base.org expire
+    // eth_newFilter handles within ~5 minutes, which surfaces here as
+    // "filter not found" (-32602) and breaks viem's watchContractEvent.
+    // Polling getLogs by block range sidesteps filters entirely.
+    const tick = async () => {
+      if (this.stopped) return;
+      try {
+        await this.pollOnce();
+      } catch (err) {
         console.warn(
-          `[evm-watcher:${this.chain.key}] watch error, will reconnect:`,
-          err,
+          `[evm-watcher:${this.chain.key}] poll error, will retry:`,
+          err instanceof Error ? err.message : err,
         );
-      },
-    });
+      } finally {
+        if (!this.stopped) {
+          this.timer = setTimeout(tick, POLL_INTERVAL_MS);
+        }
+      }
+    };
+    this.timer = setTimeout(tick, POLL_INTERVAL_MS);
   }
 
   stop(): void {
-    this.unwatch?.();
-    this.unwatch = undefined;
+    this.stopped = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  private async pollOnce(): Promise<void> {
+    const head = await this.client.getBlockNumber();
+    if (head < this.nextBlock) return;
+
+    let from = this.nextBlock;
+    while (from <= head) {
+      const to = from + MAX_BLOCK_RANGE - 1n > head ? head : from + MAX_BLOCK_RANGE - 1n;
+      const logs = await this.client.getLogs({
+        address: this.chain.vistaGateway,
+        event: VISTA_GATEWAY_ABI[0],
+        fromBlock: from,
+        toBlock: to,
+      });
+      if (logs.length > 0) {
+        await this.handleLogs(logs);
+      }
+      from = to + 1n;
+    }
+    this.nextBlock = head + 1n;
   }
 
   private async handleLogs(rawLogs: Log[]): Promise<void> {
@@ -160,6 +198,7 @@ export class EvmChainWatcher {
         sourceChain: this.chain,
         cctpNonce: campaign.cctpNonce,
         sourceTxHash: campaign.txHash,
+        totalBudget: campaign.totalBudget,
       });
     }
   }

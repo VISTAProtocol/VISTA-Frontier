@@ -10,6 +10,12 @@ export interface CctpJob {
   /// for the hackathon we pass the tx hash to a `byTxHash` Iris endpoint
   /// (sandbox supports this) and let it resolve the underlying message.
   sourceTxHash: `0x${string}`;
+  /// USDC amount (in micro-USDC, 6 decimals) the EVM advertiser committed.
+  /// Carried through so the Solana relayer can mint the matching amount of
+  /// VISTA-side USDC into the per-campaign vault once Circle has attested
+  /// the EVM-side burn (Arsitektur 2: CCTP attestation = finality proof,
+  /// Solana mint authority issues the equivalent supply on Solana).
+  totalBudget: bigint;
 }
 
 interface AttestationResponse {

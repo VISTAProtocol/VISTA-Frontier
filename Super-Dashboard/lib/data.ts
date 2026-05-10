@@ -1424,6 +1424,13 @@ export async function getActiveCampaignsForUser(
     .select("*")
     .eq("active", true)
     .gt("remaining_budget", 0)
+    // Only serve campaigns whose Solana Campaign PDA actually exists.
+    // Cross-chain rows pass through 'initiated' → 'evm_confirmed' →
+    // 'cctp_attested' → 'solana_minted' before the oracle has confirmed
+    // USDC arrival on Solana via confirm_usdc_received. Serving those
+    // earlier statuses to the SDK causes start_stream/tick_stream to
+    // hit AccountNotInitialized (0xbc4) on the campaign account.
+    .in("bridge_status", ["native", "solana_minted", "active"])
     .order("created_at", { ascending: false });
 
   if (error) {
