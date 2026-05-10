@@ -322,56 +322,11 @@ create policy "vault_withdrawals_insert_all" on public.vault_withdrawals for ins
 alter publication supabase_realtime add table public.vault_credits;
 alter publication supabase_realtime add table public.vault_withdrawals;
 
--- ─────────────────── Cross-platform attention identity ───────────────────
--- Links a primary Solana wallet (PK in users) to one or more EVM wallets on
--- Base/Arbitrum Sepolia. attention_profiles stays keyed to a single wallet;
--- aggregation happens at the API layer, unioning receipts across linked
--- wallets with reputation_weight applied.
+-- ─────────────────── Cross-platform attention identity (REMOVED) ───────────────────
+-- Earlier iteration linked end-user EVM wallets to a Solana primary identity
+-- ("watch with EVM, settle on Solana"). Removed in favor of pure Solana-only
+-- end users + advertiser-side multi-chain deposit (CCTP inflow).
+--
+-- This idempotent block drops the table if it exists from prior iterations.
 
-create table if not exists public.linked_wallets (
-  id uuid primary key default gen_random_uuid(),
-  primary_wallet text not null references public.users(wallet_address) on delete cascade,
-  secondary_wallet text not null,
-  secondary_chain text not null check (secondary_chain in (
-    'base-sepolia','arbitrum-sepolia','optimism-sepolia',
-    'polygon-amoy','monad-testnet'
-  )),
-  reputation_weight numeric not null default 0.7 check (reputation_weight >= 0 and reputation_weight <= 1),
-  verification_message text not null,
-  verification_signature text not null,
-  linked_at timestamptz not null default now(),
-  unique (secondary_wallet, secondary_chain)
-);
-
--- Idempotent enum widening: schema may have been created earlier with the
--- narrower enum. Drop and re-add to pick up new chains.
-do $$
-begin
-  if exists (
-    select 1 from information_schema.constraint_column_usage
-    where table_name = 'linked_wallets'
-      and constraint_name = 'linked_wallets_secondary_chain_check'
-  ) then
-    alter table public.linked_wallets
-      drop constraint linked_wallets_secondary_chain_check;
-    alter table public.linked_wallets
-      add constraint linked_wallets_secondary_chain_check
-      check (secondary_chain in (
-        'base-sepolia','arbitrum-sepolia','optimism-sepolia',
-        'polygon-amoy','monad-testnet'
-      ));
-  end if;
-end $$;
-
-create index if not exists idx_linked_wallets_primary on public.linked_wallets (primary_wallet);
-create index if not exists idx_linked_wallets_secondary on public.linked_wallets (lower(secondary_wallet));
-
-alter table public.linked_wallets enable row level security;
-drop policy if exists "linked_wallets_select_all" on public.linked_wallets;
-drop policy if exists "linked_wallets_insert_all" on public.linked_wallets;
-drop policy if exists "linked_wallets_delete_all" on public.linked_wallets;
-create policy "linked_wallets_select_all" on public.linked_wallets for select using (true);
-create policy "linked_wallets_insert_all" on public.linked_wallets for insert with check (true);
-create policy "linked_wallets_delete_all" on public.linked_wallets for delete using (true);
-
-alter publication supabase_realtime add table public.linked_wallets;
+drop table if exists public.linked_wallets cascade;

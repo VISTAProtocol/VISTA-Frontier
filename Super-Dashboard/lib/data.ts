@@ -308,10 +308,19 @@ async function selectCampaignsByWallet(wallet: string) {
     throw new Error("Supabase client is not configured");
   }
 
+  // Advertiser identity can be either a Solana base58 pubkey
+  // (advertiser_wallet) OR an EVM 0x address (advertiser_evm_address) —
+  // EVM-only advertisers never have a Solana wallet. Match on either; EVM
+  // addresses are case-insensitive so we lowercase both sides.
+  const isEvm = /^0x[0-9a-fA-F]{40}$/.test(normalizedWallet);
+  const filter = isEvm
+    ? `advertiser_evm_address.eq.${normalizedWallet.toLowerCase()}`
+    : `advertiser_wallet.eq.${normalizedWallet}`;
+
   const { data, error } = await supabase
     .from("campaigns")
     .select("*")
-    .eq("advertiser_wallet", normalizedWallet)
+    .or(filter)
     .order("created_at", { ascending: false });
 
   if (error) {

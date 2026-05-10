@@ -7,14 +7,24 @@ import {
   updateCampaignBridgeStatus,
 } from "@/lib/data";
 
-const sourceChainEnum = z.enum(["base-sepolia", "arbitrum-sepolia"]);
+const sourceChainEnum = z.enum([
+  "base-sepolia",
+  "arbitrum-sepolia",
+  "optimism-sepolia",
+  "polygon-amoy",
+  "monad-testnet",
+]);
 
 /// POST creates the campaign row immediately (before the EVM tx is signed),
 /// so the row survives a tab close. Status starts at 'initiated'; the oracle
 /// node's evmWatcher upgrades it to 'evm_confirmed' once the burn lands.
+///
+/// `advertiserWallet` is optional — pure EVM advertisers (no Solana wallet)
+/// pass only `advertiserEvmAddress`. We mirror the EVM addr into
+/// `advertiserWallet` for backward-compat with downstream queries.
 const initiatedSchema = z.object({
   campaignIdOnchain: z.string().min(10),
-  advertiserWallet: z.string().min(6),
+  advertiserWallet: z.string().min(6).optional(),
   advertiserEvmAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
   sourceChain: sourceChainEnum,
   title: z.string().min(2),
@@ -43,7 +53,8 @@ export async function POST(request: Request) {
 
     const campaign = await createCampaign({
       campaignIdOnchain: parsed.campaignIdOnchain,
-      advertiserWallet: parsed.advertiserWallet,
+      advertiserWallet:
+        parsed.advertiserWallet ?? parsed.advertiserEvmAddress.toLowerCase(),
       title: parsed.title,
       creativeUrl: parsed.creativeUrl,
       targetUrl: parsed.targetUrl,

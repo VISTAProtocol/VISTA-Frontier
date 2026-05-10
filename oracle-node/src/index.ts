@@ -24,7 +24,6 @@ import { startEvmWatchers } from "./evmWatcher.js";
 import { PublisherResolver } from "./publisherResolver.js";
 import { SessionBuffer } from "./sessionBuffer.js";
 import { SyncClient } from "./syncClient.js";
-import { UserWalletResolver } from "./userWalletResolver.js";
 import { scoreSignals } from "./verifier.js";
 
 const heartbeatSchema = z.object({
@@ -56,7 +55,6 @@ async function main() {
   const chain = new ChainClient(cfg);
   const sync = new SyncClient(cfg);
   const publisherResolver = new PublisherResolver(cfg);
-  const userWalletResolver = new UserWalletResolver(cfg);
   const antiReplay = new AntiReplay(
     cfg.antiReplayMaxDriftMs,
     cfg.antiReplayLruSize,
@@ -225,16 +223,7 @@ async function main() {
     const vistaCfg = await chain.fetchVistaConfig().catch(() => null);
     const isStreamOracle = vistaCfg ? chain.isStreamOracle(vistaCfg) : false;
     const campaignIdBuf = parseCampaignId(meta.campaignId);
-
-    // userWallet may be a Solana base58 pubkey (already primary identity)
-    // OR an EVM 0x address from a publisher that connected the user via
-    // wagmi/RainbowKit. For the EVM case we look up the linked Solana
-    // primary via /api/identity/resolve before calling start_stream.
-    let userPk = parsePubkey(meta.userWallet);
-    if (!userPk && meta.userWallet) {
-      const resolved = await userWalletResolver.resolve(meta.userWallet);
-      userPk = parsePubkey(resolved ?? undefined);
-    }
+    const userPk = parsePubkey(meta.userWallet);
 
     // publisherWallet is optional in the SDK heartbeat — when missing or
     // unparseable (e.g. legacy Mock-Farcaster sending an EVM hex address),
@@ -253,7 +242,7 @@ async function main() {
         `publisherWallet=${meta.publisherWallet ?? "<missing>"} (parsed=${publisherPk ? "ok" : "FAIL"})`,
         `campaignId=${meta.campaignId ?? "<missing>"} (parsed=${campaignIdBuf ? "ok" : "FAIL"})`,
         `apiKey=${meta.apiKey ? meta.apiKey.slice(0, 16) + "…" : "<missing>"}`,
-        "— check that the publisher row for this apiKey exists in Supabase. If userWallet is an EVM 0x address, the user must link it to a Solana primary at /user/identity on the dashboard before sessions can settle.",
+        "— check that the publisher row for this apiKey exists in Supabase, and that userWallet is a Solana base58 pubkey.",
       );
     }
 

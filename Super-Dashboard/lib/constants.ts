@@ -144,7 +144,6 @@ export const roleNavigation: Record<
   ],
   user: [
     { label: "Dashboard", href: "/user/dashboard" },
-    { label: "Identity", href: "/user/identity" },
     { label: "History", href: "/user/history" },
   ],
   oracle: [

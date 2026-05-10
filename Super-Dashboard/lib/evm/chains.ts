@@ -32,6 +32,9 @@ export interface EvmChainMeta {
   vistaGateway: `0x${string}` | undefined;
   /// LayerZero V2 endpoint id (informational; the gateway carries the value).
   lzEid: number;
+  /// Circle CCTP domain id — required for VistaGateway.depositCampaign and
+  /// for oracle-node CCTP attestation polling. Solana = 5.
+  cctpDomain: number;
   /// Display label for the UI.
   label: string;
   /// Block explorer URL prefix.
@@ -47,6 +50,7 @@ export const EVM_CHAINS: Record<SupportedEvmChainKey, EvmChainMeta> = {
       | `0x${string}`
       | undefined,
     lzEid: 40245,
+    cctpDomain: 6,
     label: "Base Sepolia",
     explorerTx: "https://sepolia.basescan.org/tx/",
   },
@@ -58,18 +62,23 @@ export const EVM_CHAINS: Record<SupportedEvmChainKey, EvmChainMeta> = {
       | `0x${string}`
       | undefined,
     lzEid: 40231,
+    cctpDomain: 3,
     label: "Arbitrum Sepolia",
     explorerTx: "https://sepolia.arbiscan.io/tx/",
   },
-  // Identity-only chains: no VistaGateway deployed (no advertiser deposits
-  // from these chains today). Listed so users can link wallets on them and
-  // earn into their Solana primary identity via the resolver.
+  // The chains below need a VistaGateway deployment + env var set
+  // (NEXT_PUBLIC_VISTA_GATEWAY_<CHAIN>) before the cross-chain deposit
+  // flow will work. UI shows them in the chain selector but flags as
+  // "not configured" until the env is provided.
   "optimism-sepolia": {
     key: "optimism-sepolia",
     chain: optimismSepolia,
     usdc: "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
-    vistaGateway: undefined,
+    vistaGateway: process.env.NEXT_PUBLIC_VISTA_GATEWAY_OPTIMISM_SEPOLIA as
+      | `0x${string}`
+      | undefined,
     lzEid: 40232,
+    cctpDomain: 2,
     label: "Optimism Sepolia",
     explorerTx: "https://sepolia-optimism.etherscan.io/tx/",
   },
@@ -77,18 +86,26 @@ export const EVM_CHAINS: Record<SupportedEvmChainKey, EvmChainMeta> = {
     key: "polygon-amoy",
     chain: polygonAmoy,
     usdc: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
-    vistaGateway: undefined,
+    vistaGateway: process.env.NEXT_PUBLIC_VISTA_GATEWAY_POLYGON_AMOY as
+      | `0x${string}`
+      | undefined,
     lzEid: 40267,
+    cctpDomain: 7,
     label: "Polygon Amoy",
     explorerTx: "https://amoy.polygonscan.com/tx/",
   },
+  // Monad: CCTP support not yet confirmed on testnet. UI lists for future
+  // deploy; advertiser flow will warn if cctpDomain = -1.
   "monad-testnet": {
     key: "monad-testnet",
     chain: monadTestnet,
     usdc: "0xf817257fed379853cDe0fa4F97AB987181B1E5Ea",
-    vistaGateway: undefined,
+    vistaGateway: process.env.NEXT_PUBLIC_VISTA_GATEWAY_MONAD_TESTNET as
+      | `0x${string}`
+      | undefined,
     lzEid: 40204,
-    label: "Monad Testnet",
+    cctpDomain: -1,
+    label: "Monad Testnet (CCTP TBD)",
     explorerTx: "https://testnet.monadexplorer.com/tx/",
   },
 };
