@@ -4,6 +4,7 @@ import Link from "next/link"
 import { BarChart3, Coins, Eye, MousePointerClick } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useVistaWallet } from "@/lib/use-vista-wallet";
+import { useEvmAuth } from "@/lib/use-evm-auth";
 
 import { EmptyState } from "@/components/empty-state"
 import { LoadingScreen } from "@/components/loading-screen"
@@ -25,7 +26,13 @@ import type { AdvertiserDashboardData } from "@/lib/types"
 import { cn, formatDateTime, formatUsdc } from "@/lib/utils"
 
 export default function AdvertiserDashboardPage() {
-  const { address } = useVistaWallet()
+  const { address: solanaAddress } = useVistaWallet()
+  const evm = useEvmAuth()
+  // Effective advertiser identity: prefer Solana if connected, otherwise
+  // fall back to EVM. Both flows hit the same /api/dashboard/advertiser
+  // endpoint — selectCampaignsByWallet auto-detects 0x vs base58 and
+  // queries the appropriate column.
+  const address = solanaAddress ?? (evm.address ? evm.address.toLowerCase() : undefined)
   const [data, setData] = useState<AdvertiserDashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

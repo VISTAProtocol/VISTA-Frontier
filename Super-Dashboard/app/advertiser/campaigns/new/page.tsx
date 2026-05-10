@@ -38,11 +38,8 @@ import { buildExplorerUrl, bytes32FromSeed, cn, formatUsdc } from "@/lib/utils";
 import { useVistaProgram } from "@/lib/use-vista-program";
 import { depositCampaign, usdcToBn } from "@/lib/vista-actions";
 import { crossChainVaultPda } from "@/lib/solana";
-import {
-  EVM_CHAINS,
-  wagmiConfig,
-  type SupportedEvmChainKey,
-} from "@/lib/evm/config";
+import { EVM_CHAINS, type SupportedEvmChainKey } from "@/lib/evm/chains";
+import { wagmiConfig } from "@/lib/evm/config";
 import { VISTA_GATEWAY_ABI } from "@/lib/evm/vista-gateway";
 import { USDC_ABI, usdcUnits } from "@/lib/evm/usdc";
 import { solanaPubkeyToBytes32 } from "@/lib/evm/solana-bytes";
@@ -371,8 +368,14 @@ export default function NewCampaignPage() {
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!publicKey) {
-      toast.error("Please connect your Solana wallet first.");
+    // Solana wallet only required for Solana-native deposit. EVM advertisers
+    // (Monad/OP/Polygon-only) skip Phantom entirely.
+    if (depositChain === "solana" && !publicKey) {
+      toast.error("Please connect your Solana wallet for a Solana deposit.");
+      return;
+    }
+    if (depositChain !== "solana" && !evm.address) {
+      toast.error("Please connect an EVM wallet for cross-chain deposit.");
       return;
     }
     if (!uploadResult) {
@@ -459,7 +462,10 @@ export default function NewCampaignPage() {
     parsedBudget: number,
     chainKey: SupportedEvmChainKey,
   ) {
-    if (!publicKey || !uploadResult || duration == null) return;
+    // Solana wallet is OPTIONAL for cross-chain advertisers — pure EVM
+    // advertisers (Monad/Optimism/Polygon-only) shouldn't need Phantom.
+    // The campaign id mixes in the EVM sender so it's still unique.
+    if (!uploadResult || duration == null) return;
     const meta = EVM_CHAINS[chainKey];
     if (!meta.vistaGateway) {
       throw new Error(

@@ -42,7 +42,13 @@ export interface AdvertiserRecord {
   created_at: string
 }
 
-export type SourceChain = "solana-devnet" | "base-sepolia" | "arbitrum-sepolia"
+export type SourceChain =
+  | "solana-devnet"
+  | "base-sepolia"
+  | "arbitrum-sepolia"
+  | "optimism-sepolia"
+  | "polygon-amoy"
+  | "monad-testnet"
 
 export type BridgeStatus =
   | "native"
