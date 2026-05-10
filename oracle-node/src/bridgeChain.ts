@@ -10,8 +10,11 @@ import {
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   createMintToInstruction,
+  createAssociatedTokenAccountIdempotentInstruction,
   getAccount,
+  getAssociatedTokenAddressSync,
   getMint,
   TokenAccountNotFoundError,
 } from "@solana/spl-token";
@@ -25,10 +28,14 @@ function disc(name: string): Buffer {
 /// BridgeConfig layout (Anchor):
 /// disc(8) | admin(32) | usdc_mint(32) | oracle(32) | vista_wallet(32) | lz_executor_authority(32) | bump(1)
 const BRIDGE_CONFIG_USDC_MINT_OFFSET = 8 + 32;
+const BRIDGE_CONFIG_ORACLE_OFFSET = 8 + 32 + 32; // 72
+const BRIDGE_CONFIG_VISTA_WALLET_OFFSET = 8 + 32 + 32 + 32; // 104
 const BRIDGE_CONFIG_LZ_EXECUTOR_OFFSET = 8 + 32 + 32 + 32 + 32; // 136
 
 const RECEIVE_CAMPAIGN_METADATA_DISC = disc("receive_campaign_metadata");
 const CONFIRM_USDC_RECEIVED_DISC = disc("confirm_usdc_received");
+const START_CROSS_CHAIN_STREAM_DISC = disc("start_cross_chain_stream");
+const TICK_CROSS_CHAIN_DISC = disc("tick_cross_chain");
 
 export interface ReceiveCampaignParams {
   campaignId: Buffer; // 32
@@ -132,6 +139,79 @@ export class BridgeChainClient {
       [Buffer.from("xchain_vault"), campaignId],
       this.programId,
     )[0];
+  }
+
+  xchainSessionPda(sessionId: Buffer): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("xchain_session"), sessionId],
+      this.programId,
+    )[0];
+  }
+
+  bridgeBalancePda(wallet: PublicKey): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("bridge_balance_v2"), wallet.toBuffer()],
+      this.programId,
+    )[0];
+  }
+
+  /// Global escrow vault for cross-chain user + publisher earnings.
+  /// Derived deterministically; created once via initialize_bridge_user_vault.
+  bridgeUserVaultPda(): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("bridge_user_vault")],
+      this.programId,
+    )[0];
+  }
+
+  bridgeUserVaultAuthorityPda(): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("bridge_user_vault_authority")],
+      this.programId,
+    )[0];
+  }
+
+  /// Read `bridge_config.oracle`. The on-chain stream-cranking instructions
+  /// (`start_cross_chain_stream`, `tick_cross_chain`) require the caller to
+  /// equal this; oracle-node uses it to decide whether to attempt the
+  /// cross-chain branch or skip silently for attention-only oracles.
+  async fetchBridgeOracle(): Promise<PublicKey> {
+    const info = await this.connection.getAccountInfo(this.bridgeConfigPda);
+    if (!info) {
+      throw new Error(
+        `bridge_config PDA ${this.bridgeConfigPda.toBase58()} not found`,
+      );
+    }
+    return new PublicKey(
+      info.data.subarray(BRIDGE_CONFIG_ORACLE_OFFSET, BRIDGE_CONFIG_ORACLE_OFFSET + 32),
+    );
+  }
+
+  /// Read `bridge_config.vista_wallet`. Used by tick_cross_chain to compute
+  /// the vista fee recipient ATA — the program rejects any other owner.
+  async fetchBridgeVistaWallet(): Promise<PublicKey> {
+    const info = await this.connection.getAccountInfo(this.bridgeConfigPda);
+    if (!info) {
+      throw new Error(
+        `bridge_config PDA ${this.bridgeConfigPda.toBase58()} not found`,
+      );
+    }
+    return new PublicKey(
+      info.data.subarray(
+        BRIDGE_CONFIG_VISTA_WALLET_OFFSET,
+        BRIDGE_CONFIG_VISTA_WALLET_OFFSET + 32,
+      ),
+    );
+  }
+
+  /// Returns true iff this campaign was bridged via vista_bridge (i.e. its
+  /// `xchain_campaign` PDA exists). Used by oracle-node's flush handler to
+  /// route stream-cranking to the right program: cross-chain campaigns can
+  /// only be cranked through vista_bridge, native campaigns through
+  /// vista_protocol.
+  async isCrossChainCampaign(campaignId: Buffer): Promise<boolean> {
+    const info = await this.connection.getAccountInfo(this.campaignPda(campaignId));
+    return info !== null;
   }
 
   /// LayerZero stub: in trusted-relayer mode the oracle node signs as both
@@ -248,6 +328,124 @@ export class BridgeChainClient {
       data,
     });
     return this.send(ix);
+  }
+
+  /// Starts a cross-chain stream session. Only callable by `bridge_config.oracle`
+  /// (= bridge relayer keypair today). Equivalent of `vista_protocol.start_stream`
+  /// but talks to vista_bridge's CrossChainSession PDA instead.
+  async startCrossChainStream(args: {
+    sessionId: Buffer;
+    campaignId: Buffer;
+    userWallet: PublicKey;
+    publisherWallet: PublicKey;
+  }): Promise<string> {
+    const { sessionId, campaignId, userWallet, publisherWallet } = args;
+    if (sessionId.length !== 32 || campaignId.length !== 32) {
+      throw new Error("sessionId and campaignId must each be 32 bytes");
+    }
+    const data = Buffer.concat([
+      START_CROSS_CHAIN_STREAM_DISC,
+      sessionId,
+      campaignId,
+    ]);
+    const ix = new TransactionInstruction({
+      programId: this.programId,
+      keys: [
+        { pubkey: this.keypair.publicKey, isSigner: true, isWritable: true }, // oracle
+        { pubkey: this.bridgeConfigPda, isSigner: false, isWritable: false },
+        { pubkey: this.campaignPda(campaignId), isSigner: false, isWritable: false },
+        { pubkey: this.xchainSessionPda(sessionId), isSigner: false, isWritable: true },
+        { pubkey: userWallet, isSigner: false, isWritable: false },
+        { pubkey: publisherWallet, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      ],
+      data,
+    });
+    return this.send(ix);
+  }
+
+  /// Cranks a cross-chain stream tick: pays out `seconds_elapsed` worth of
+  /// the campaign's per-second rate from the per-campaign vault to:
+  ///   user_token, publisher_token, validator_pool, vista_wallet_token.
+  /// For hackathon parity we route the validator share to the same ATA as
+  /// the vista fee — both are protocol-level fees, and vista_bridge only
+  /// constrains validator_pool by mint. Production would split these.
+  ///
+  /// Idempotently creates ATAs for user / publisher / vista_wallet in the
+  /// same tx, since the on-chain instruction does not init them and would
+  /// fail with AccountNotInitialized otherwise.
+  async tickCrossChain(args: {
+    sessionId: Buffer;
+    campaignId: Buffer;
+    userWallet: PublicKey;
+    publisherWallet: PublicKey;
+    secondsElapsed: number;
+  }): Promise<string> {
+    const { sessionId, campaignId, userWallet, publisherWallet, secondsElapsed } = args;
+    if (sessionId.length !== 32 || campaignId.length !== 32) {
+      throw new Error("sessionId and campaignId must each be 32 bytes");
+    }
+    if (secondsElapsed <= 0) throw new Error("secondsElapsed must be > 0");
+
+    const usdcMint = await this.fetchBridgeUsdcMint();
+    const vistaWallet = await this.fetchBridgeVistaWallet();
+    const vistaAta = getAssociatedTokenAddressSync(usdcMint, vistaWallet, true);
+    // Route the validator share to oracle_registry's reward_vault — that's
+    // the canonical pool validators draw from via claim_rewards.
+    const [rewardVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("reward_vault")],
+      this.cfg.programs.oracleRegistry,
+    );
+
+    const data = Buffer.concat([TICK_CROSS_CHAIN_DISC, u64Le(BigInt(secondsElapsed))]);
+
+    const tickIx = new TransactionInstruction({
+      programId: this.programId,
+      keys: [
+        { pubkey: this.keypair.publicKey, isSigner: true, isWritable: true }, // oracle
+        { pubkey: this.bridgeConfigPda, isSigner: false, isWritable: false },
+        { pubkey: this.xchainSessionPda(sessionId), isSigner: false, isWritable: true },
+        { pubkey: this.campaignPda(campaignId), isSigner: false, isWritable: true },
+        { pubkey: this.vaultAuthorityPda(campaignId), isSigner: false, isWritable: false },
+        { pubkey: this.vaultPda(campaignId), isSigner: false, isWritable: true },
+        { pubkey: this.bridgeUserVaultAuthorityPda(), isSigner: false, isWritable: false },
+        { pubkey: this.bridgeUserVaultPda(), isSigner: false, isWritable: true },
+        { pubkey: rewardVault, isSigner: false, isWritable: true }, // validator_pool
+        { pubkey: vistaAta, isSigner: false, isWritable: true }, // vista_wallet_token
+        { pubkey: this.bridgeBalancePda(userWallet), isSigner: false, isWritable: true },
+        { pubkey: this.bridgeBalancePda(publisherWallet), isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      ],
+      data,
+    });
+
+    // Idempotent ATA creation for vista_wallet's ATA (still needed because
+    // vista fee goes to it directly). User and publisher don't need ATAs
+    // anymore — they pull via bridge_withdraw later.
+    const vistaAtaIx = createAssociatedTokenAccountIdempotentInstruction(
+      this.keypair.publicKey,
+      vistaAta,
+      vistaWallet,
+      usdcMint,
+    );
+
+    return this.sendMany([vistaAtaIx, tickIx]);
+  }
+
+  private async sendMany(ixs: TransactionInstruction[]): Promise<string> {
+    const { blockhash } = await this.connection.getLatestBlockhash();
+    const tx = new Transaction({
+      feePayer: this.keypair.publicKey,
+      recentBlockhash: blockhash,
+    });
+    for (const ix of ixs) tx.add(ix);
+    tx.sign(this.keypair);
+    const sig = await this.connection.sendRawTransaction(tx.serialize());
+    await this.connection.confirmTransaction(sig, "confirmed");
+    return sig;
   }
 
   private async send(ix: TransactionInstruction): Promise<string> {

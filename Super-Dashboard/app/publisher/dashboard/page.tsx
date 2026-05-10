@@ -50,6 +50,8 @@ import type {
   PublisherRecord,
 } from "@/lib/types";
 import { useVistaProgram } from "@/lib/use-vista-program";
+import { bridgeWithdraw, fetchBridgeBalance } from "@/lib/bridge-actions";
+import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { useVistaWallet } from "@/lib/use-vista-wallet";
 import { fetchUserBalance, withdraw } from "@/lib/vista-actions";
 import { formatUsdc, truncateAddress, truncateHash } from "@/lib/utils";
@@ -601,9 +603,12 @@ export default function PublisherDashboardPage() {
   const [isLoadingDashboard, setIsLoadingDashboard] = useState(true);
 
   const [vaultBalanceRaw, setVaultBalanceRaw] = useState<bigint>(BigInt(0));
+  const [bridgeBalanceRaw, setBridgeBalanceRaw] = useState<bigint>(BigInt(0));
   const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [lastWithdrawTx, setLastWithdrawTx] = useState<string | null>(null);
+  const { connection } = useConnection();
+  const anchorWallet = useAnchorWallet();
 
   // Fetch platforms
   useEffect(() => {
@@ -647,7 +652,13 @@ export default function PublisherDashboardPage() {
     } catch (err) {
       console.warn("[publisher-dashboard] fetchUserBalance failed:", err);
     }
-  }, [program, address]);
+    try {
+      const raw = await fetchBridgeBalance(connection, new PublicKey(address));
+      setBridgeBalanceRaw(raw);
+    } catch (err) {
+      console.warn("[publisher-dashboard] fetchBridgeBalance failed:", err);
+    }
+  }, [program, address, connection]);
 
   useEffect(() => {
     void refreshBalance();
@@ -659,10 +670,19 @@ export default function PublisherDashboardPage() {
     setLastWithdrawTx(null);
     setIsWithdrawing(true);
 
-    const amountAtoms = vaultBalanceRaw;
+    const amountAtoms = vaultBalanceRaw + bridgeBalanceRaw;
 
     try {
-      const sig = await withdraw(program, new PublicKey(address));
+      // Withdraw both escrows in sequence; skip whichever has zero balance to
+      // avoid the on-chain `NothingToWithdraw` revert.
+      let sig: string | null = null;
+      if (vaultBalanceRaw > BigInt(0)) {
+        sig = await withdraw(program, new PublicKey(address));
+      }
+      if (bridgeBalanceRaw > BigInt(0) && anchorWallet) {
+        sig = await bridgeWithdraw(connection, anchorWallet);
+      }
+      if (!sig) throw new Error("No balance to withdraw.");
       setLastWithdrawTx(sig);
 
       try {
@@ -689,11 +709,16 @@ export default function PublisherDashboardPage() {
     } finally {
       setIsWithdrawing(false);
     }
-  }, [program, address, vaultBalanceRaw, fetchTotalWithdrawn, refreshBalance]);
+  }, [program, address, vaultBalanceRaw, bridgeBalanceRaw, anchorWallet, connection, fetchTotalWithdrawn, refreshBalance]);
+
+  const totalBalanceRaw = useMemo(
+    () => vaultBalanceRaw + bridgeBalanceRaw,
+    [vaultBalanceRaw, bridgeBalanceRaw],
+  );
 
   const hasVaultBalance = useMemo(
-    () => vaultBalanceRaw > BigInt(0),
-    [vaultBalanceRaw],
+    () => totalBalanceRaw > BigInt(0),
+    [totalBalanceRaw],
   );
 
   if (isLoadingDashboard || !dashboard) {
@@ -806,7 +831,7 @@ export default function PublisherDashboardPage() {
         <AnalyticsTab
           dashboard={dashboard}
           totalWithdrawn={totalWithdrawn}
-          vaultBalanceRaw={vaultBalanceRaw}
+          vaultBalanceRaw={totalBalanceRaw}
           isWithdrawing={isWithdrawing}
           lastWithdrawTx={lastWithdrawTx}
           withdrawError={withdrawError}

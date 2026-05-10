@@ -26,17 +26,26 @@ import type { UserDashboardData } from "@/lib/types";
 import { useVistaProgram } from "@/lib/use-vista-program";
 import { useVistaWallet } from "@/lib/use-vista-wallet";
 import { fetchUserBalance, withdraw } from "@/lib/vista-actions";
+import { bridgeWithdraw, fetchBridgeBalance } from "@/lib/bridge-actions";
+import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { formatDateTime, formatUsdc } from "@/lib/utils";
 
 export default function UserDashboardPage() {
   const { address } = useVistaWallet();
   const program = useVistaProgram();
+  const { connection } = useConnection();
+  const anchorWallet = useAnchorWallet();
 
   const [data, setData] = useState<UserDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Vault balance in USDC base units (BigInt-safe), polled from chain.
+  // `vaultBalanceRaw` = native (vista_protocol) escrow.
+  // `bridgeBalanceRaw` = cross-chain (vista_bridge) escrow.
+  // Treated as a single combined balance for display + withdraw to keep the
+  // user-facing UX simple — both are USDC, both are owed to the same wallet.
   const [vaultBalanceRaw, setVaultBalanceRaw] = useState<bigint>(BigInt(0));
+  const [bridgeBalanceRaw, setBridgeBalanceRaw] = useState<bigint>(BigInt(0));
   const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [lastWithdrawTx, setLastWithdrawTx] = useState<string | null>(null);
@@ -49,7 +58,13 @@ export default function UserDashboardPage() {
     } catch (err) {
       console.warn("[user-dashboard] fetchUserBalance failed:", err);
     }
-  }, [program, address]);
+    try {
+      const raw = await fetchBridgeBalance(connection, new PublicKey(address));
+      setBridgeBalanceRaw(raw);
+    } catch (err) {
+      console.warn("[user-dashboard] fetchBridgeBalance failed:", err);
+    }
+  }, [program, address, connection]);
 
   useEffect(() => {
     void refreshBalance();
@@ -88,7 +103,7 @@ export default function UserDashboardPage() {
     setLastWithdrawTx(null);
     setIsWithdrawing(true);
 
-    const amountAtoms = vaultBalanceRaw;
+    const amountAtoms = vaultBalanceRaw + bridgeBalanceRaw;
 
     try {
       // Pre-flight: the signer pays tx fee + rent for their USDC ATA
@@ -108,7 +123,19 @@ export default function UserDashboardPage() {
         );
       }
 
-      const sig = await withdraw(program, new PublicKey(address));
+      // Withdraw both escrows. Skip whichever has zero balance to avoid the
+      // on-chain `NothingToWithdraw` revert. We submit native first since
+      // it's the more-tested path; bridge_withdraw runs after if balance>0.
+      let sig: string | null = null;
+      if (vaultBalanceRaw > BigInt(0)) {
+        sig = await withdraw(program, new PublicKey(address));
+      }
+      if (bridgeBalanceRaw > BigInt(0) && anchorWallet) {
+        sig = await bridgeWithdraw(connection, anchorWallet);
+      }
+      if (!sig) {
+        throw new Error("No balance to withdraw.");
+      }
       setLastWithdrawTx(sig);
 
       try {
@@ -174,7 +201,8 @@ export default function UserDashboardPage() {
     );
   }
 
-  const hasVaultBalance = vaultBalanceRaw > BigInt(0);
+  const totalBalanceRaw = vaultBalanceRaw + bridgeBalanceRaw;
+  const hasVaultBalance = totalBalanceRaw > BigInt(0);
 
   return (
     <div className="space-y-6">
@@ -232,12 +260,25 @@ export default function UserDashboardPage() {
                 Vault balance
               </p>
               <p className="mt-1 text-3xl font-semibold tabular-nums">
-                {formatUsdc(Number(vaultBalanceRaw) / 10 ** USDC_DECIMALS)}{" "}
+                {formatUsdc(Number(totalBalanceRaw) / 10 ** USDC_DECIMALS)}{" "}
                 <span className="text-sm font-normal text-muted-foreground">
                   USDC
                 </span>
               </p>
-              <div className="mt-3 flex gap-6 text-sm text-muted-foreground"></div>
+              <div className="mt-3 flex gap-6 text-sm text-muted-foreground">
+                <span>
+                  Native:{" "}
+                  <span className="tabular-nums text-foreground">
+                    {formatUsdc(Number(vaultBalanceRaw) / 10 ** USDC_DECIMALS)}
+                  </span>
+                </span>
+                <span>
+                  Cross-chain:{" "}
+                  <span className="tabular-nums text-foreground">
+                    {formatUsdc(Number(bridgeBalanceRaw) / 10 ** USDC_DECIMALS)}
+                  </span>
+                </span>
+              </div>
             </div>
 
             <div className="flex flex-col items-end gap-2">

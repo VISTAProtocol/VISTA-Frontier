@@ -223,32 +223,24 @@ pub mod vista_bridge {
         let cv_seeds: &[&[u8]] = &[b"xchain_vault_authority", campaign_id.as_ref(), &[cv_bump]];
         let signer_seeds = &[cv_seeds];
 
-        // user → user_token (their ATA)
+        // user + publisher → bridge_user_vault (single escrow vault).
+        // Per-wallet book-keeping happens via BridgeUserBalance.balance below;
+        // beneficiaries call `bridge_withdraw` later to drain into their own
+        // ATA. Routing both shares in one transfer avoids two separate CPIs.
+        let user_plus_publisher = user_amount
+            .checked_add(publisher_amount)
+            .ok_or(BridgeError::Overflow)?;
         token::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.xchain_vault.to_account_info(),
-                    to: ctx.accounts.user_token.to_account_info(),
+                    to: ctx.accounts.bridge_user_vault.to_account_info(),
                     authority: ctx.accounts.xchain_vault_authority.to_account_info(),
                 },
                 signer_seeds,
             ),
-            user_amount,
-        )?;
-
-        // publisher → publisher_token (their ATA)
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.key(),
-                Transfer {
-                    from: ctx.accounts.xchain_vault.to_account_info(),
-                    to: ctx.accounts.publisher_token.to_account_info(),
-                    authority: ctx.accounts.xchain_vault_authority.to_account_info(),
-                },
-                signer_seeds,
-            ),
-            publisher_amount,
+            user_plus_publisher,
         )?;
 
         // validator pool (oracle_registry drains this asynchronously)
@@ -290,12 +282,20 @@ pub mod vista_bridge {
             .lifetime_earned
             .checked_add(user_amount)
             .ok_or(BridgeError::Overflow)?;
+        ub.balance = ub
+            .balance
+            .checked_add(user_amount)
+            .ok_or(BridgeError::Overflow)?;
         ub.bump = ctx.bumps.user_balance;
 
         let pb = &mut ctx.accounts.publisher_balance;
         pb.wallet = session.publisher_wallet;
         pb.lifetime_earned = pb
             .lifetime_earned
+            .checked_add(publisher_amount)
+            .ok_or(BridgeError::Overflow)?;
+        pb.balance = pb
+            .balance
             .checked_add(publisher_amount)
             .ok_or(BridgeError::Overflow)?;
         pb.bump = ctx.bumps.publisher_balance;
@@ -337,6 +337,58 @@ pub mod vista_bridge {
 
     // ───────────────────── Refund (admin-gated) ─────────────────────
 
+    /// One-time init for the global `bridge_user_vault` (escrow holding
+    /// user + publisher cross-chain earnings) plus its authority PDA. Idempotent
+    /// via Anchor's `init` constraint — re-running fails clean.
+    pub fn initialize_bridge_user_vault(
+        ctx: Context<InitializeBridgeUserVault>,
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.admin.key() == ctx.accounts.bridge_config.admin,
+            BridgeError::NotAdmin
+        );
+        emit!(BridgeUserVaultInitialized {
+            vault: ctx.accounts.bridge_user_vault.key(),
+        });
+        Ok(())
+    }
+
+    /// Beneficiary (user or publisher) drains their accumulated cross-chain
+    /// earnings from `bridge_user_vault` to their own USDC ATA. Mirrors
+    /// `vista_protocol.withdraw` for native campaigns.
+    pub fn bridge_withdraw(ctx: Context<BridgeWithdraw>) -> Result<()> {
+        let ub = &mut ctx.accounts.user_balance;
+        require!(
+            ub.wallet == ctx.accounts.beneficiary.key(),
+            BridgeError::NotOwner
+        );
+        let amount = ub.balance;
+        require!(amount > 0, BridgeError::NothingToWithdraw);
+        ub.balance = 0;
+
+        let bump = ctx.bumps.bridge_user_vault_authority;
+        let seeds: &[&[u8]] = &[b"bridge_user_vault_authority", &[bump]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                Transfer {
+                    from: ctx.accounts.bridge_user_vault.to_account_info(),
+                    to: ctx.accounts.beneficiary_token.to_account_info(),
+                    authority: ctx.accounts.bridge_user_vault_authority.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )?;
+
+        emit!(BridgeWithdrawn {
+            wallet: ub.wallet,
+            amount,
+        });
+        Ok(())
+    }
+
     /// Admin can refund a cross-chain campaign's remaining budget back to a
     /// recipient ATA. For the hackathon this is admin-only; production should
     /// require an EVM signature from the original `advertiser_evm` recovered
@@ -375,6 +427,34 @@ pub mod vista_bridge {
         emit!(CrossChainCampaignRefunded {
             campaign_id,
             amount: refund,
+        });
+        Ok(())
+    }
+
+    /// Admin-only: rotate `bridge_config.usdc_mint`. Needed because that field
+    /// was set at `initialize_bridge` time and is immutable otherwise — but we
+    /// switched the project's USDC mint after init (Arsitektur 2: relayer mints
+    /// the Solana-side equivalent itself, so the configured mint must be one
+    /// whose mint authority is the relayer). Existing per-campaign vaults keep
+    /// their old mint (they're token accounts, frozen at create time); new
+    /// `receive_campaign_metadata` calls will use the new mint.
+    pub fn update_usdc_mint(
+        ctx: Context<UpdateUsdcMint>,
+        new_mint: Pubkey,
+    ) -> Result<()> {
+        require!(new_mint != Pubkey::default(), BridgeError::ZeroAddress);
+        require!(
+            ctx.accounts.admin.key() == ctx.accounts.bridge_config.admin,
+            BridgeError::NotAdmin
+        );
+
+        let cfg = &mut ctx.accounts.bridge_config;
+        let old = cfg.usdc_mint;
+        cfg.usdc_mint = new_mint;
+
+        emit!(BridgeUsdcMintUpdated {
+            old_mint: old,
+            new_mint,
         });
         Ok(())
     }
@@ -541,21 +621,21 @@ pub struct TickCrossChain<'info> {
     )]
     pub xchain_vault: Box<Account<'info, TokenAccount>>,
 
-    /// User's USDC ATA — receives the user portion directly.
-    #[account(
-        mut,
-        token::mint = bridge_config.usdc_mint,
-        constraint = user_token.owner == session.user_wallet @ BridgeError::WrongRecipient,
-    )]
-    pub user_token: Box<Account<'info, TokenAccount>>,
+    /// CHECK: PDA authority for bridge_user_vault.
+    #[account(seeds = [b"bridge_user_vault_authority"], bump)]
+    pub bridge_user_vault_authority: UncheckedAccount<'info>,
 
-    /// Publisher's USDC ATA — receives the publisher portion directly.
+    /// Global escrow vault: holds the combined user + publisher shares for
+    /// every cross-chain campaign tick. Each beneficiary's slice is tracked
+    /// off-vault by their `BridgeUserBalance.balance` and pulled out via
+    /// `bridge_withdraw`.
     #[account(
         mut,
+        seeds = [b"bridge_user_vault"],
+        bump,
         token::mint = bridge_config.usdc_mint,
-        constraint = publisher_token.owner == session.publisher_wallet @ BridgeError::WrongRecipient,
     )]
-    pub publisher_token: Box<Account<'info, TokenAccount>>,
+    pub bridge_user_vault: Box<Account<'info, TokenAccount>>,
 
     /// Validator-rewards pool token account. Drained by oracle_registry.
     /// Validated by mint only — caller passes the right one.
@@ -574,7 +654,7 @@ pub struct TickCrossChain<'info> {
         init_if_needed,
         payer = oracle,
         space = 8 + BridgeUserBalance::SIZE,
-        seeds = [b"bridge_balance", session.user_wallet.as_ref()],
+        seeds = [b"bridge_balance_v2", session.user_wallet.as_ref()],
         bump,
     )]
     pub user_balance: Box<Account<'info, BridgeUserBalance>>,
@@ -583,7 +663,7 @@ pub struct TickCrossChain<'info> {
         init_if_needed,
         payer = oracle,
         space = 8 + BridgeUserBalance::SIZE,
-        seeds = [b"bridge_balance", session.publisher_wallet.as_ref()],
+        seeds = [b"bridge_balance_v2", session.publisher_wallet.as_ref()],
         bump,
     )]
     pub publisher_balance: Box<Account<'info, BridgeUserBalance>>,
@@ -642,6 +722,80 @@ pub struct RefundCrossChain<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
+pub struct InitializeBridgeUserVault<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(seeds = [b"bridge_config"], bump = bridge_config.bump)]
+    pub bridge_config: Account<'info, BridgeConfig>,
+
+    #[account(address = bridge_config.usdc_mint)]
+    pub usdc_mint: Account<'info, Mint>,
+
+    /// CHECK: PDA authority of bridge_user_vault.
+    #[account(seeds = [b"bridge_user_vault_authority"], bump)]
+    pub bridge_user_vault_authority: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = admin,
+        token::mint = usdc_mint,
+        token::authority = bridge_user_vault_authority,
+        seeds = [b"bridge_user_vault"],
+        bump,
+    )]
+    pub bridge_user_vault: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct BridgeWithdraw<'info> {
+    pub beneficiary: Signer<'info>,
+
+    #[account(seeds = [b"bridge_config"], bump = bridge_config.bump)]
+    pub bridge_config: Account<'info, BridgeConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"bridge_balance_v2", beneficiary.key().as_ref()],
+        bump = user_balance.bump,
+    )]
+    pub user_balance: Account<'info, BridgeUserBalance>,
+
+    #[account(
+        mut,
+        seeds = [b"bridge_user_vault"],
+        bump,
+        token::mint = bridge_config.usdc_mint,
+    )]
+    pub bridge_user_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: PDA authority of bridge_user_vault.
+    #[account(seeds = [b"bridge_user_vault_authority"], bump)]
+    pub bridge_user_vault_authority: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        token::mint = bridge_config.usdc_mint,
+        constraint = beneficiary_token.owner == beneficiary.key() @ BridgeError::WrongRecipient,
+    )]
+    pub beneficiary_token: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateUsdcMint<'info> {
+    pub admin: Signer<'info>,
+
+    #[account(mut, seeds = [b"bridge_config"], bump = bridge_config.bump)]
+    pub bridge_config: Account<'info, BridgeConfig>,
+}
+
 // ─────────────────────────── State ───────────────────────────
 
 #[account]
@@ -698,11 +852,16 @@ impl CrossChainSession {
 #[account]
 pub struct BridgeUserBalance {
     pub wallet: Pubkey,
+    /// Cumulative attribution. Read-only after first credit; never decremented
+    /// even on withdraw. Dashboard reads this for "total earned ever".
     pub lifetime_earned: u64,
+    /// Withdrawable amount currently sitting in `bridge_user_vault`. Goes up
+    /// with each tick_cross_chain credit and is zeroed by `bridge_withdraw`.
+    pub balance: u64,
     pub bump: u8,
 }
 impl BridgeUserBalance {
-    pub const SIZE: usize = 32 + 8 + 1;
+    pub const SIZE: usize = 32 + 8 + 8 + 1;
 }
 
 // ─────────────────────────── Events ───────────────────────────
@@ -768,6 +927,23 @@ pub struct CrossChainCampaignRefunded {
     pub amount: u64,
 }
 
+#[event]
+pub struct BridgeUserVaultInitialized {
+    pub vault: Pubkey,
+}
+
+#[event]
+pub struct BridgeWithdrawn {
+    pub wallet: Pubkey,
+    pub amount: u64,
+}
+
+#[event]
+pub struct BridgeUsdcMintUpdated {
+    pub old_mint: Pubkey,
+    pub new_mint: Pubkey,
+}
+
 // ─────────────────────────── Errors ───────────────────────────
 
 #[error_code]
@@ -808,6 +984,10 @@ pub enum BridgeError {
     WrongVistaWallet,
     #[msg("Nothing left to refund")]
     NothingToRefund,
+    #[msg("Caller is not the balance owner")]
+    NotOwner,
+    #[msg("Nothing to withdraw")]
+    NothingToWithdraw,
     #[msg("Arithmetic overflow")]
     Overflow,
 }

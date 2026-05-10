@@ -87,6 +87,15 @@ const eventSchema = z.discriminatedUnion("event", [
     }),
   }),
   z.object({
+    event: z.literal("cross_chain_minted"),
+    payload: z.object({
+      campaign_id_onchain: z.string(),
+      mint_tx: z.string(),
+      minted_amount_raw: z.string(),
+      minted_at: z.string(),
+    }),
+  }),
+  z.object({
     event: z.literal("cross_chain_active"),
     payload: z.object({
       campaign_id_onchain: z.string(),

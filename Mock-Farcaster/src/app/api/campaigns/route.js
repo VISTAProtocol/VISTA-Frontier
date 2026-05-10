@@ -26,11 +26,13 @@ export async function GET(request) {
     }
 
     const data = await res.json();
-    const allCampaigns = Array.isArray(data) ? data : (data.campaigns ?? []);
+    const campaigns = Array.isArray(data) ? data : (data.campaigns ?? []);
 
-    const currentChain = process.env.NEXT_PUBLIC_VISTA_CHAIN || "solana-devnet";
-    const campaigns = allCampaigns.filter((c) => c.chain === currentChain);
-
+    // No chain filter: cross-chain bridge means any active campaign should be
+    // shown to publisher viewers regardless of which chain it originated from.
+    // The on-chain settlement path (vista_protocol vs vista_bridge) is picked
+    // by the SDK based on each campaign's `chain` / `bridge_status`, not by
+    // hiding cross-chain campaigns from the feed.
     return Response.json({ campaigns });
   } catch (err) {
     console.error("[API/campaigns] Failed to fetch campaigns:", err);

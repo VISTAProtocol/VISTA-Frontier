@@ -215,6 +215,29 @@ async function main() {
   const streamStarted = new Set<string>();
   const aggregatedSessions = new Set<string>();
 
+  // Routing cache: campaign → "cross_chain" | "native". Decided lazily on
+  // first flush per session by probing whether the xchain_campaign PDA in
+  // vista_bridge exists. Cross-chain campaigns must be cranked through
+  // vista_bridge (different PDAs, different oracle authority); native ones
+  // through vista_protocol. Cached because the answer is immutable per
+  // campaign.
+  const campaignType = new Map<string, "cross_chain" | "native">();
+
+  // Set true at startup if this oracle's keypair == bridge_config.oracle.
+  // Only the bridge oracle is allowed to call start_cross_chain_stream /
+  // tick_cross_chain; attention-only oracles silently skip cross-chain
+  // sessions.
+  let isBridgeStreamOracle = false;
+  try {
+    const bridgeOracle = await bridge.fetchBridgeOracle();
+    isBridgeStreamOracle = cfg.keypair.publicKey.equals(bridgeOracle);
+    console.log(
+      `[stream-cranker] cross-chain stream cranker = ${bridgeOracle.toBase58()}; this instance is ${isBridgeStreamOracle ? "AUTHORIZED" : "NOT authorized"} for cross-chain ticks.`,
+    );
+  } catch (err) {
+    console.warn("[stream-cranker] failed to read bridge_config.oracle:", err);
+  }
+
   async function refreshSelf() {
     try {
       const state = await chain.fetchSelf();
@@ -320,86 +343,152 @@ async function main() {
       );
     }
 
-    if (isStreamOracle && vistaCfg && campaignIdBuf && userPk && publisherPk) {
-      // start_stream — first window only. Idempotent guard: local set +
-      // catch the on-chain "already in use" account-already-init error.
-      if (!streamStarted.has(sid)) {
+    if (campaignIdBuf && userPk && publisherPk) {
+      // Routing: probe vista_bridge for an xchain_campaign PDA the first
+      // time we see this campaign. Cross-chain campaigns are cranked through
+      // vista_bridge (different program / PDAs / oracle authority); native
+      // ones through vista_protocol via the existing path.
+      const campaignKey = campaignIdBuf.toString("hex");
+      let kind = campaignType.get(campaignKey);
+      if (!kind) {
         try {
-          const sig = await chain.startStream({
-            sessionId: sessionIdBuf,
-            campaignId: campaignIdBuf,
-            userWallet: userPk,
-            publisherWallet: publisherPk,
-            usdcMint: vistaCfg.usdcMint,
-          });
-          streamStarted.add(sid);
-          console.log(`[stream-cranker] start_stream ${sid} tx=${sig}`);
+          kind = (await bridge.isCrossChainCampaign(campaignIdBuf))
+            ? "cross_chain"
+            : "native";
+          campaignType.set(campaignKey, kind);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (msg.includes("already in use") || msg.includes("Allocate")) {
+          console.warn(
+            `[stream-cranker] campaign-type probe failed for ${campaignKey}:`,
+            err,
+          );
+        }
+      }
+
+      if (kind === "cross_chain") {
+        // Only `bridge_config.oracle` (the bridge relayer) can crank
+        // cross-chain streams. Attention-only oracles silently skip.
+        if (!isBridgeStreamOracle) {
+          // No-op: another oracle (the bridge relayer) handles this.
+        } else {
+          if (!streamStarted.has(sid)) {
+            try {
+              const sig = await bridge.startCrossChainStream({
+                sessionId: sessionIdBuf,
+                campaignId: campaignIdBuf,
+                userWallet: userPk,
+                publisherWallet: publisherPk,
+              });
+              streamStarted.add(sid);
+              console.log(`[stream-cranker] start_cross_chain_stream ${sid} tx=${sig}`);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              if (msg.includes("already in use") || msg.includes("Allocate")) {
+                streamStarted.add(sid);
+              } else {
+                console.warn(
+                  `[stream-cranker] start_cross_chain_stream failed for ${sid}:`,
+                  msg,
+                );
+              }
+            }
+          }
+          if (streamStarted.has(sid)) {
+            try {
+              const sig = await bridge.tickCrossChain({
+                sessionId: sessionIdBuf,
+                campaignId: campaignIdBuf,
+                userWallet: userPk,
+                publisherWallet: publisherPk,
+                secondsElapsed: cfg.windowSeconds,
+              });
+              console.log(`[stream-cranker] tick_cross_chain ${sid} tx=${sig}`);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.warn(
+                `[stream-cranker] tick_cross_chain failed for ${sid}:`,
+                msg,
+              );
+              const logs =
+                (err as { transactionLogs?: string[] }).transactionLogs ??
+                (err as { logs?: string[] }).logs ??
+                [];
+              if (logs.length > 0) {
+                const programReason = logs.find((l: string) =>
+                  /AnchorError|Error Message|Error:/i.test(l),
+                );
+                if (programReason) console.warn("  on-chain:", programReason);
+              }
+            }
+          }
+        }
+      } else if (kind === "native" && isStreamOracle && vistaCfg) {
+        // start_stream — first window only. Idempotent guard: local set +
+        // catch the on-chain "already in use" account-already-init error.
+        if (!streamStarted.has(sid)) {
+          try {
+            const sig = await chain.startStream({
+              sessionId: sessionIdBuf,
+              campaignId: campaignIdBuf,
+              userWallet: userPk,
+              publisherWallet: publisherPk,
+              usdcMint: vistaCfg.usdcMint,
+            });
             streamStarted.add(sid);
-          } else {
+            console.log(`[stream-cranker] start_stream ${sid} tx=${sig}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes("already in use") || msg.includes("Allocate")) {
+              streamStarted.add(sid);
+            } else {
+              const logs =
+                (err as { transactionLogs?: string[] }).transactionLogs ??
+                (err as { logs?: string[] }).logs ??
+                [];
+              console.warn(`[stream-cranker] start_stream failed for ${sid}:`, msg);
+              if (logs.length > 0) {
+                const programReason = logs.find((l: string) =>
+                  /AnchorError|Error Message|Error:/i.test(l),
+                );
+                if (programReason) console.warn("  on-chain:", programReason);
+                if (logs.some((l) => /caused by account: campaign/i.test(l))) {
+                  console.warn(
+                    `  → campaign ${meta.campaignId} has no Solana PDA. Either the cross-chain bridge isn't complete (bridge_status != 'solana_minted'/'active'/'native') or deposit_campaign failed. Re-deposit or wait for confirm_usdc_received.`,
+                  );
+                }
+              }
+            }
+          }
+        }
+
+        if (!streamStarted.has(sid)) {
+          console.warn(
+            `[stream-cranker] skip tick_stream ${sid}: session not initialized yet (start_stream pending/failed)`,
+          );
+        } else {
+          try {
+            const sig = await chain.tickStream({
+              sessionId: sessionIdBuf,
+              campaignId: campaignIdBuf,
+              userWallet: userPk,
+              publisherWallet: publisherPk,
+              vistaWallet: vistaCfg.vistaWallet,
+              usdcMint: vistaCfg.usdcMint,
+              secondsElapsed: cfg.windowSeconds,
+            });
+            console.log(`[stream-cranker] tick_stream ${sid} tx=${sig}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
             const logs =
               (err as { transactionLogs?: string[] }).transactionLogs ??
               (err as { logs?: string[] }).logs ??
               [];
-            console.warn(`[stream-cranker] start_stream failed for ${sid}:`, msg);
+            console.warn(`[stream-cranker] tick_stream failed for ${sid}:`, msg);
             if (logs.length > 0) {
               const programReason = logs.find((l: string) =>
                 /AnchorError|Error Message|Error:/i.test(l),
               );
               if (programReason) console.warn("  on-chain:", programReason);
-              // Campaign PDA missing = the dashboard is serving a campaign
-              // whose Solana side hasn't been deposited yet (cross-chain
-              // bridge incomplete, or native deposit_campaign tx never
-              // landed). The fix is at the campaign level, not retry —
-              // log it loud so it isn't mistaken for a flaky RPC.
-              if (logs.some((l) => /caused by account: campaign/i.test(l))) {
-                console.warn(
-                  `  → campaign ${meta.campaignId} has no Solana PDA. Either the cross-chain bridge isn't complete (bridge_status != 'solana_minted'/'active'/'native') or deposit_campaign failed. Re-deposit or wait for confirm_usdc_received.`,
-                );
-              }
             }
-          }
-        }
-      }
-
-      // tick_stream — runs every window with `windowSeconds` worth of elapsed
-      // viewing time. This is what actually moves USDC from the campaign
-      // vault into the user/publisher escrow PDAs. Skipped when the session
-      // PDA isn't known-initialized — otherwise we'd hit AccountNotInitialized
-      // (0xbc4) on every tick until start_stream finally succeeds.
-      if (!streamStarted.has(sid)) {
-        console.warn(
-          `[stream-cranker] skip tick_stream ${sid}: session not initialized yet (start_stream pending/failed)`,
-        );
-      } else {
-        try {
-          const sig = await chain.tickStream({
-            sessionId: sessionIdBuf,
-            campaignId: campaignIdBuf,
-            userWallet: userPk,
-            publisherWallet: publisherPk,
-            vistaWallet: vistaCfg.vistaWallet,
-            usdcMint: vistaCfg.usdcMint,
-            secondsElapsed: cfg.windowSeconds,
-          });
-          console.log(`[stream-cranker] tick_stream ${sid} tx=${sig}`);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          const logs =
-            (err as { transactionLogs?: string[] }).transactionLogs ??
-            (err as { logs?: string[] }).logs ??
-            [];
-          console.warn(`[stream-cranker] tick_stream failed for ${sid}:`, msg);
-          // Surface the actual on-chain reason so this isn't a black box —
-          // common causes: campaign budget exhausted, advertiser_token empty,
-          // or campaign.active=false after a previous tick zeroed the budget.
-          if (logs.length > 0) {
-            const programReason = logs.find((l: string) =>
-              /AnchorError|Error Message|Error:/i.test(l),
-            );
-            if (programReason) console.warn("  on-chain:", programReason);
           }
         }
       }

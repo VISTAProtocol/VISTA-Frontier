@@ -196,6 +196,15 @@ type SyncEvent =
       };
     }
   | {
+      event: "cross_chain_minted";
+      payload: {
+        campaign_id_onchain: string;
+        mint_tx: string;
+        minted_amount_raw: string;
+        minted_at: string;
+      };
+    }
+  | {
       event: "cross_chain_active";
       payload: {
         campaign_id_onchain: string;
@@ -383,6 +392,13 @@ export async function applyOracleSyncEvent(evt: SyncEvent) {
       await supabase
         .from("campaigns")
         .update({ bridge_status: "cctp_attested" })
+        .eq("campaign_id_onchain", evt.payload.campaign_id_onchain.toLowerCase());
+      return;
+    }
+    case "cross_chain_minted": {
+      await supabase
+        .from("campaigns")
+        .update({ bridge_status: "solana_minted" })
         .eq("campaign_id_onchain", evt.payload.campaign_id_onchain.toLowerCase());
       return;
     }
