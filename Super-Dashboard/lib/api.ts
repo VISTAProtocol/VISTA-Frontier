@@ -34,6 +34,24 @@ export function assertOracleSecret(request: Request) {
 }
 
 export async function assertJwt(request: Request): Promise<string> {
+  const { walletAddress } = await assertJwtPayload(request)
+  return walletAddress
+}
+
+export type WalletType = "solana" | "evm"
+
+export interface JwtPayload {
+  walletAddress: string
+  walletType: WalletType
+}
+
+/**
+ * Like `assertJwt` but also returns the wallet type so callers can decide
+ * how to filter (e.g. campaigns by `advertiser_wallet` vs
+ * `advertiser_evm_address`). Defaults to "solana" for tokens issued before
+ * the EVM advertiser auth flow existed.
+ */
+export async function assertJwtPayload(request: Request): Promise<JwtPayload> {
   const authHeader = request.headers.get("authorization")
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null
 
@@ -46,7 +64,9 @@ export async function assertJwt(request: Request): Promise<string> {
     const { payload } = await jwtVerify(token, new TextEncoder().encode(secret))
     const walletAddress = payload.walletAddress as string | undefined
     if (!walletAddress) throw new ApiError("Invalid token payload.", 401)
-    return walletAddress
+    const walletType =
+      (payload.walletType as WalletType | undefined) ?? "solana"
+    return { walletAddress, walletType }
   } catch (error) {
     if (error instanceof ApiError) throw error
     throw new ApiError("Invalid or expired token.", 401)

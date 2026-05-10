@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { fetchJson } from "@/lib/http";
-import { EVM_CHAINS, type SupportedEvmChainKey } from "@/lib/evm/config";
+import { EVM_CHAINS, type SupportedEvmChainKey } from "@/lib/evm/chains";
 import type { BridgeStatus } from "@/lib/types";
 
 interface BridgeStatusRow {

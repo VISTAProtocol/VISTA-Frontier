@@ -321,3 +321,12 @@ create policy "vault_withdrawals_insert_all" on public.vault_withdrawals for ins
 
 alter publication supabase_realtime add table public.vault_credits;
 alter publication supabase_realtime add table public.vault_withdrawals;
+
+-- ─────────────────── Cross-platform attention identity (REMOVED) ───────────────────
+-- Earlier iteration linked end-user EVM wallets to a Solana primary identity
+-- ("watch with EVM, settle on Solana"). Removed in favor of pure Solana-only
+-- end users + advertiser-side multi-chain deposit (CCTP inflow).
+--
+-- This idempotent block drops the table if it exists from prior iterations.
+
+drop table if exists public.linked_wallets cascade;
