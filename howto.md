@@ -10,22 +10,22 @@ spl-token mint
 
 Step A: Run 3 oracle-node instances (3 terminal terpisah)
 
-Terminal 1 (oracle_1, port 4001):
-cd oracle-node  
- export $(grep -v '^#' local-oracles/oracle_1.env | xargs)
+cd oracle-node
+unset ORACLE_KEYPAIR_JSON  
+set -a && source local-oracles/oracle_1.env && set +a
 npm run dev
 
-Terminal 2 (oracle_2, port 4002):  
- cd oracle-node  
- export $(grep -v '^#' local-oracles/oracle_2.env | xargs)  
- npm run dev
-
-Terminal 3 (oracle_3, port 4003):  
- cd oracle-node  
- export $(grep -v '^#' local-oracles/oracle_3.env | xargs)
+lsof -ti tcp:4002 | xargs kill
+cd oracle-node
+unset ORACLE_KEYPAIR_JSON
+set -a && source local-oracles/oracle_2.env && set +a
 npm run dev
 
-cd /Users/scientivan/Programming/VISTA/Vista-Frontier/Solana-Program
+lsof -ti tcp:4003 | xargs kill
+cd oracle-node
+unset ORACLE_KEYPAIR_JSON
+set -a && source local-oracles/oracle_3.env && set +a
+npm run dev
 
 export ANCHOR_PROVIDER_URL=https://api.devnet.solana.com  
  export ANCHOR_WALLET=$HOME/.config/solana/id.json  
@@ -43,3 +43,17 @@ oracle addresses:
 AZ8nJSfM4usUaVy2hRY5vNNNNy8xZtA57cCkQPH53qKt
 FmWb3Bx78X26cdVB3GJuWeCnSpDhaMnyxxcrRQVSqVFB
 8A1Stkwy2H3cePGjwdKatsFVrLgdw66b5Mtwha3pRb5i
+
+lsof -ti tcp:4001 tcp:4002 tcp:4003 | xargs kill 2>/dev/null
+
+# Terminal 1 (di oracle-node/)
+
+set -a && source local-oracles/oracle_1.env && set +a && npm run dev
+
+# Terminal 2
+
+set -a && source local-oracles/oracle_2.env && set +a && npm run dev
+
+# Terminal 3
+
+set -a && source local-oracles/oracle_3.env && set +a && npm run dev

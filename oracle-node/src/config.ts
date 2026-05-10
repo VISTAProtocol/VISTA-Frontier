@@ -57,7 +57,11 @@ function loadKeypair(): Keypair {
     );
   }
   const secret = JSON.parse(inline);
-  return Keypair.fromSecretKey(Uint8Array.from(secret));
+  const kp = Keypair.fromSecretKey(Uint8Array.from(secret));
+  // Surface which pubkey was loaded so multi-instance setups can spot env
+  // drift immediately at startup instead of debugging via /health.
+  console.log(`[oracle-node] keypair loaded from ORACLE_KEYPAIR_JSON, pubkey=${kp.publicKey.toBase58()}`);
+  return kp;
 }
 
 export interface OracleConfig {

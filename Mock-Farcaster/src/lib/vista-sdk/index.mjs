@@ -599,15 +599,20 @@ var k = class {
         (this.overlayScrollHandler = c),
         window.addEventListener("scroll", c, { passive: !0 }),
         window.addEventListener("resize", c, { passive: !0 }));
-      // Live overlay: compute attention + accumulate USDC LOCALLY from the
-      // collector signals every 100ms. The oracle network's job is on-chain
-      // attestation (submit_verification → tick_stream); the overlay
-      // shouldn't go silent just because a heartbeat round-trip is slow,
-      // CORS-blocked, or one of the 3 oracles transiently 503'd. We use the
-      // same `calculateScore` rubric the SDK already ships (visibility +
-      // tab focus + mouse + scroll → 0–1), then display 0–100%.
-      let lastTickTs = Date.now();
-      const PREDICTION_RATE = 333e-6; // USDC/sec, matches handleResponse rate
+      // Overlay is a pure read-only view of oracle-attested state. Every
+      // value shown here comes from the oracle round-trip:
+      //   - Attention %  ← this.lastScore      (set in handleResponse from
+      //                                         oracle's `score` field, which
+      //                                         is scoreSignals(signals) 0..100
+      //                                         on the oracle-node side)
+      //   - Session $    ← this.sessionAmount  (advanced in handleResponse on
+      //                                         each successful heartbeat)
+      //   - Duration     ← wall-clock since attachZone (cosmetic only)
+      // The overlay never re-derives score locally — what the user sees is
+      // exactly what the oracle network attested. If heartbeats stop landing
+      // (all oracles down, network blocked), values freeze at the last
+      // oracle-confirmed state, which is the correct "no attestation"
+      // signal rather than an optimistic local guess.
       ((this.overlayIntervalId = window.setInterval(() => {
         const a = document.getElementById("vista-overlay-amount");
         const p = document.getElementById("vista-overlay-score");
@@ -616,36 +621,14 @@ var k = class {
         const C = document.getElementById("vista-status-text");
 
         const isActive = this.isActive && !!this.collector;
-        // Compute fresh local score from the collector's current signals.
-        // 0 if the zone is detached / collector torn down.
-        let liveScore01 = 0;
-        if (isActive) {
-          try {
-            const signals = this.collector.collect();
-            liveScore01 = this.collector.calculateScore(signals) ?? 0;
-          } catch {
-            liveScore01 = 0;
-          }
-        }
-        // Display attention as 0–100%.
-        const pct = Math.max(0, Math.min(100, Math.round(liveScore01 * 100)));
-        if (p) p.textContent = `${pct}%`;
-
-        // Accumulate USDC on every overlay tick when actively scoring.
-        // sessionAmount is the canonical local counter; getStatus() uses it
-        // for downstream consumers (earn callback, dashboard, etc.).
-        const now = Date.now();
-        const deltaSec = Math.max(0, (now - lastTickTs) / 1000);
-        lastTickTs = now;
-        if (isActive && liveScore01 > 0 && deltaSec > 0) {
-          this.sessionAmount = (this.sessionAmount || 0) + deltaSec * liveScore01 * PREDICTION_RATE;
-          this.lastValidSeconds = (this.lastValidSeconds || 0) + deltaSec * liveScore01;
-          this.lastScore = pct; // mirror the live attention so getStatus() reports current
-        }
+        const oracleScore = isActive
+          ? Math.max(0, Math.min(100, Math.round(this.lastScore || 0)))
+          : 0;
+        if (p) p.textContent = `${oracleScore}%`;
         if (a) a.innerHTML = y(this.sessionAmount || 0);
 
         if (E) {
-          const dur = Math.floor((now - this.startTime) / 1e3);
+          const dur = Math.floor((Date.now() - this.startTime) / 1e3);
           E.textContent = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
         }
         if (M) M.style.background = isActive ? n.primary : n.muted;

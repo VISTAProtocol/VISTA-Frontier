@@ -34,7 +34,11 @@ const heartbeatSchema = z.object({
   publisherWallet: z.string().optional(),
   timestamp: z.coerce.number().int(),
   nonce: z.string().min(1),
-  score: z.coerce.number().int().min(0).max(100).optional(),
+  // Informational only — the SDK sends its own optimistic 0..1 fraction here
+  // for diagnostics. The authoritative score is re-derived server-side via
+  // scoreSignals(signals), so we accept any non-negative number and never
+  // read this field beyond schema validation.
+  score: z.coerce.number().nonnegative().optional(),
   signals: z
     .object({
       visibility: z.coerce.number().min(0).max(1).optional(),

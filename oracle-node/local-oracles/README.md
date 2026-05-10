@@ -20,13 +20,17 @@ From the `oracle-node/` directory:
 
 ```bash
 # Load env from local-oracles/oracle_1.env then run
-export $(grep -v '^#' local-oracles/oracle_1.env | xargs) && npm run dev
+set -a && source local-oracles/oracle_1.env && set +a && npm run dev
 ```
 
 Or one-liner with env-cmd if installed:
 ```bash
 npx env-cmd -f local-oracles/oracle_1.env npm run dev
 ```
+
+> Don't use `export $(grep -v '^#' file | xargs)` — `ORACLE_KEYPAIR_JSON` is a JSON
+> array containing commas/brackets that xargs word-splits, corrupting the value.
+> `set -a; source` preserves the literal value.
 
 ## Run all 3 in parallel
 
@@ -35,14 +39,16 @@ Open 3 terminals. In each:
 ```bash
 # Terminal 1
 cd oracle-node
-export $(grep -v '^#' local-oracles/oracle_1.env | xargs)
+set -a && source local-oracles/oracle_1.env && set +a
 npm run dev
 
 # Terminal 2 (same pattern, oracle_2.env)
 # Terminal 3 (same pattern, oracle_3.env)
 ```
 
-Each binds to its own PORT (4001/4002/4003) — no port conflicts.
+Each binds to its own PORT (4001/4002/4003) — no port conflicts. Each env file
+sets its own `ORACLE_KEYPAIR_JSON`, which overrides any shell-rc-exported
+default so each oracle uses its own key.
 
 ## Register on-chain
 

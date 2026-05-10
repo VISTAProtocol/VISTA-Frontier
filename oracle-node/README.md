@@ -29,7 +29,8 @@ Operators then call `oracle_registry::claim_rewards` to pull their accrued USDC.
 ```bash
 cd oracle-node
 cp .env.example .env
-# 1. point ORACLE_KEYPAIR_PATH at your Solana keypair
+# 1. set ORACLE_KEYPAIR_JSON to your Solana keypair as a raw JSON byte array
+#    (e.g. ORACLE_KEYPAIR_JSON="$(cat ./keypair.json)")
 # 2. set ORACLE_WEBHOOK_SECRET to match Super-Dashboard's value
 solana-keygen new -o ./keypair.json --no-bip39-passphrase --silent
 # Fund the keypair with devnet USDC:
@@ -47,9 +48,9 @@ Once registered on-chain (`oracle_registry::register_oracle`), the node logs `ac
 ## Multi-node demo deploy (Railway)
 
 ```
-oracle-node-1: PORT=4001  ORACLE_KEYPAIR_PATH=/keys/keypair_1.json
-oracle-node-2: PORT=4002  ORACLE_KEYPAIR_PATH=/keys/keypair_2.json
-oracle-node-3: PORT=4003  ORACLE_KEYPAIR_PATH=/keys/keypair_3.json
+oracle-node-1: PORT=4001  ORACLE_KEYPAIR_JSON=[<keypair_1 bytes>]
+oracle-node-2: PORT=4002  ORACLE_KEYPAIR_JSON=[<keypair_2 bytes>]
+oracle-node-3: PORT=4003  ORACLE_KEYPAIR_JSON=[<keypair_3 bytes>]
 ```
 
 All three use the same image, different keypairs. All three register on devnet. The SDK fans heartbeats out to all three (or, until the SDK supports multi-broadcast, you can drive the dashboard's `/api/oracle/active-nodes` and route from there).
