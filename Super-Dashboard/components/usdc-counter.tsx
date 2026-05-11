@@ -89,7 +89,11 @@ export function UsdcCounter({
   const lastFrameRef = useRef<number | null>(null);
   const normalizedWallet = normalizeWallet(walletAddress);
 
-  // Load latest session: seconds_verified from sessions table, earned amount from vault_credits for that session only
+  // Load latest session for this wallet. Both earned amount AND elapsed
+  // seconds are summed from `stream_ticks` so the display stays consistent
+  // with what the oracle actually credited (the `sessions` table can lag
+  // for in-progress sessions). `seconds_verified` is used as a floor in
+  // case ticks were pruned for an ended session.
   useEffect(() => {
     const supabase = getBrowserSupabaseClient();
     if (!supabase) return;
@@ -97,40 +101,59 @@ export function UsdcCounter({
     let cancelled = false;
 
     async function loadLatestSession() {
-      const { data: session } = await supabase!
-        .from("sessions")
-        .select("session_id_onchain, active, seconds_verified")
-        .eq("user_wallet", normalizedWallet)
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      try {
+        const { data: session, error: sessionError } = await supabase!
+          .from("sessions")
+          .select("session_id_onchain, active, seconds_verified")
+          .eq("user_wallet", normalizedWallet)
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-      if (cancelled || !session) return;
+        if (sessionError) {
+          console.warn("[usdc-counter] sessions query failed:", sessionError);
+          return;
+        }
+        if (cancelled || !session) return;
 
-      const row = session as Record<string, unknown>;
-      const secs = Number(row.seconds_verified ?? 0);
-      const sessionIdOnchain = String(row.session_id_onchain);
+        const row = session as Record<string, unknown>;
+        const sessionIdOnchain = String(row.session_id_onchain);
+        const sessionSecondsVerified = Number(row.seconds_verified ?? 0);
 
-      // Sum user_amount from stream_ticks for this session only
-      const { data: ticks } = await supabase!
-        .from("stream_ticks")
-        .select("user_amount")
-        .eq("session_id_onchain", sessionIdOnchain);
+        const { data: ticks, error: ticksError } = await supabase!
+          .from("stream_ticks")
+          .select("user_amount, seconds_elapsed")
+          .eq("session_id_onchain", sessionIdOnchain);
 
-      if (cancelled) return;
+        if (ticksError) {
+          console.warn("[usdc-counter] stream_ticks query failed:", ticksError);
+        }
+        if (cancelled) return;
 
-      const sessionEarned = (
-        (ticks ?? []) as Array<Record<string, unknown>>
-      ).reduce((sum, t) => sum + Number(t.user_amount ?? 0), 0);
+        const rows = (ticks ?? []) as Array<Record<string, unknown>>;
+        const sessionEarned = rows.reduce(
+          (sum, t) => sum + Number(t.user_amount ?? 0),
+          0,
+        );
+        const ticksSeconds = rows.reduce(
+          (sum, t) => sum + Number(t.seconds_elapsed ?? 0),
+          0,
+        );
+        const secs = Math.max(ticksSeconds, sessionSecondsVerified);
 
-      setSessionId(sessionIdOnchain);
-      setVerified(Boolean(row.active));
-      secondsTargetRef.current = secs;
-      setDisplaySeconds(secs);
-      setTargetSeconds(secs);
-      amountTargetRef.current = sessionEarned;
-      setDisplayAmount(sessionEarned);
-      setTargetAmount(sessionEarned);
+        setSessionId(sessionIdOnchain);
+        setVerified(Boolean(row.active));
+        secondsTargetRef.current = secs;
+        setDisplaySeconds(secs);
+        setTargetSeconds(secs);
+        amountTargetRef.current = sessionEarned;
+        setDisplayAmount(sessionEarned);
+        setTargetAmount(sessionEarned);
+      } catch (err) {
+        if (!cancelled) {
+          console.warn("[usdc-counter] loadLatestSession failed:", err);
+        }
+      }
     }
 
     void loadLatestSession();

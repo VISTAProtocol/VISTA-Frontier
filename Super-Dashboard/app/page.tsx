@@ -5,11 +5,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { toast } from "sonner";
 
 import { BrandMark } from "@/components/brand-mark";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { WalletConnectButton } from "@/components/wallet-connect-button";
 import { RoleSwitcher } from "@/components/role-switcher";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,10 +19,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { APP_TAGLINE, roleMeta } from "@/lib/constants";
-import { fetchJson } from "@/lib/http";
+import { APP_TAGLINE } from "@/lib/constants";
 import type { RoleName } from "@/lib/types";
-import { useVistaWallet } from "@/lib/use-vista-wallet";
 import { cn } from "@/lib/utils";
 
 const tickerItems = [
@@ -124,10 +120,8 @@ const roleCards: Record<
 
 export default function HomePage() {
   const router = useRouter();
-  const { address, isConnected, openConnectModal } = useVistaWallet();
   const [activeRole, setActiveRole] = useState<RoleName>("advertiser");
   const [imageLoaded, setImageLoaded] = useState(false);
-  const [pendingRole, setPendingRole] = useState<RoleName | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [counter, setCounter] = useState(0.00341);
   const [demoCursor, setDemoCursor] = useState({ x: 0, y: 0, active: false });
@@ -203,30 +197,10 @@ export default function HomePage() {
     };
   }, [streaming]);
 
-  async function handleEnterRole(role: RoleName) {
-    if (!isConnected || !address) {
-      openConnectModal?.();
-      return;
-    }
-
-    try {
-      setPendingRole(role);
-      const status = await fetchJson<{ registered: boolean }>(
-        `/api/roles/status?role=${role}&wallet=${address}`,
-      );
-      const destination = status.registered
-        ? roleMeta[role].dashboardPath
-        : roleMeta[role].onboardingPath;
-      router.push(destination);
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Unable to open the selected workspace.",
-      );
-    } finally {
-      setPendingRole(null);
-    }
+  function handleEnterRole(role: RoleName) {
+    // Wallet connection is enforced inside the role workspace itself —
+    // the home page just routes users to their chosen role entry.
+    router.push(`/${role}`);
   }
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(57,185,118,0.20),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(90,102,241,0.14),_transparent_30%)] px-4 py-6 sm:px-6 lg:px-8">
@@ -250,7 +224,6 @@ export default function HomePage() {
             >
               Docs
             </Link>
-            <WalletConnectButton />
             <ThemeToggle />
           </div>
         </header>
@@ -285,8 +258,8 @@ export default function HomePage() {
               </div>
 
               <div className="flex flex-wrap gap-3">
-                <Button size="lg" onClick={() => handleEnterRole("user")}>
-                  Start Earning USDC →
+                <Button size="lg" variant="outline">
+                  <Link href="#roles">Explore Roles</Link>
                 </Button>
                 <Button size="lg" variant="outline">
                   <Link href="#docs">Read the Docs</Link>
@@ -546,12 +519,9 @@ export default function HomePage() {
                   </ul>
                   <Button
                     className="w-full"
-                    disabled={pendingRole === activeRole}
                     onClick={() => handleEnterRole(activeRole)}
                   >
-                    {pendingRole === activeRole
-                      ? "Checking access..."
-                      : roleCards[activeRole].cta}
+                    {roleCards[activeRole].cta}
                     <ArrowRight className="size-4" />
                   </Button>
                 </CardContent>
@@ -640,12 +610,12 @@ export default function HomePage() {
             You should own yours.
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-muted-foreground">
-            No sign-up. No email. No KYC. Connect a wallet and start earning in
-            under 60 seconds.
+            No sign-up. No email. No KYC. Pick a role below and bring a wallet
+            when you land on the workspace.
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-            <Button size="lg" onClick={() => handleEnterRole("user")}>
-              Connect Wallet & Start
+            <Button size="lg" variant="outline">
+              <Link href="#roles">Choose Your Role</Link>
             </Button>
             <Button
               size="lg"

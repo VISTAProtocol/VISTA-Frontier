@@ -104,7 +104,7 @@ export default function UserOnboardingPage() {
       <PageHeader
         eyebrow="User onboarding"
         title="Tell VISTA what to show you"
-        description="Add your age, location, and preference profile so the Oracle can route relevant campaigns."
+        description="Add your age, location, and preference profile so the Oracle can route relevant campaigns. Rewards are paid out in USDC on Solana."
       />
 
       <Card>
@@ -112,7 +112,7 @@ export default function UserOnboardingPage() {
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div className="grid gap-6 sm:grid-cols-2">
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="walletAddress">Wallet address</Label>
+                <Label htmlFor="walletAddress">Solana wallet address</Label>
                 <Input id="walletAddress" readOnly value={address ?? ""} />
               </div>
               <div className="space-y-2">

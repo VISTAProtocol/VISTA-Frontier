@@ -1468,18 +1468,21 @@ export async function getUserDashboard(
     ).map((id) => selectCampaignById(id)),
   );
 
+  // Weight category votes by attention spent rather than raw session
+  // count, so a long session matters more than a glance.
   const categoryFrequency = new Map<string, number>();
-
-  for (const session of sessions) {
+  for (const tick of ticks) {
+    const session = sessions.find(
+      (s) => s.session_id_onchain === tick.session_id_onchain,
+    );
     const campaign = campaigns.find(
-      (item) => item?.campaign_id_onchain === session.campaign_id_onchain,
+      (item) => item?.campaign_id_onchain === session?.campaign_id_onchain,
     );
     const topPreference = campaign?.target_preferences?.[0];
-
     if (topPreference) {
       categoryFrequency.set(
         topPreference,
-        (categoryFrequency.get(topPreference) ?? 0) + 1,
+        (categoryFrequency.get(topPreference) ?? 0) + tick.seconds_elapsed,
       );
     }
   }
@@ -1488,6 +1491,45 @@ export async function getUserDashboard(
     Array.from(categoryFrequency.entries()).sort(
       ([, a], [, b]) => b - a,
     )[0]?.[0] ?? "tech";
+
+  // Per-session seconds from ticks. We fall back to `session.seconds_verified`
+  // (the on-chain canonical value) when ticks haven't accumulated yet — for
+  // ended sessions the oracle keeps `seconds_verified` updated even after
+  // ticks roll off the live stream.
+  const secondsBySession = new Map<string, number>();
+  for (const tick of ticks) {
+    secondsBySession.set(
+      tick.session_id_onchain,
+      (secondsBySession.get(tick.session_id_onchain) ?? 0) +
+        tick.seconds_elapsed,
+    );
+  }
+  for (const session of sessions) {
+    const fromTicks = secondsBySession.get(session.session_id_onchain) ?? 0;
+    secondsBySession.set(
+      session.session_id_onchain,
+      Math.max(fromTicks, session.seconds_verified),
+    );
+  }
+
+  // A session counts as "observed" once it has any verified attention,
+  // either via ticks or via the on-chain seconds_verified counter. This
+  // matches the dashboard's intuition (you completed a session if you
+  // watched any of it), regardless of whether the row was flipped to
+  // active=false yet.
+  const observedSessionIds = new Set<string>();
+  for (const [sessionId, seconds] of secondsBySession.entries()) {
+    if (seconds > 0) observedSessionIds.add(sessionId);
+  }
+  const completedSessions = sessions.filter(
+    (session) =>
+      !session.active && observedSessionIds.has(session.session_id_onchain),
+  ).length;
+  const totalSecondsVerified = Array.from(secondsBySession.values()).reduce(
+    (sum, seconds) => sum + seconds,
+    0,
+  );
+
   const activeSession = sessions.find((session) => session.active) ?? null;
   const activeTicks = activeSession
     ? ticks.filter(
@@ -1503,11 +1545,8 @@ export async function getUserDashboard(
   return {
     stats: {
       totalUsdcEarned: vaultBalance.totalEarned,
-      totalSessionsCompleted: sessions.filter((session) => !session.active)
-        .length,
-      totalSecondsVerified: sumNumbers(
-        sessions.map((session) => session.seconds_verified),
-      ),
+      totalSessionsCompleted: completedSessions,
+      totalSecondsVerified,
       favoriteAdCategory,
       attentionScore: attentionScore.score,
       attentionUpdatedAt: attentionScore.updatedAt,
@@ -1670,57 +1709,110 @@ export async function getAttentionScore(
   const supabase = createServerSupabaseClient();
   if (!supabase) throw new Error("Supabase client is not configured");
 
-  let query = supabase
+  // Source of truth is `stream_ticks` joined to `sessions` — receipts may
+  // not have been minted yet for in-flight sessions, but the user has
+  // already accrued real attention. We still consult receipts for the
+  // chain/platform filters so the API contract is preserved.
+  let receiptQuery = supabase
     .from("receipts")
-    .select("*")
+    .select("session_id_onchain, chain, platform")
     .eq("user_wallet", normalizedWallet);
 
   if (filters?.chains?.length) {
-    query = query.in("chain", filters.chains);
+    receiptQuery = receiptQuery.in("chain", filters.chains);
   }
-
   if (filters?.platforms?.length) {
-    query = query.in(
+    receiptQuery = receiptQuery.in(
       "platform",
       filters.platforms.map((platform) => platform.trim().toLowerCase()),
     );
   }
 
-  const { data: receiptRows, error: receiptError } = await query;
+  const { data: receiptRows, error: receiptError } = await receiptQuery;
   if (receiptError) throw new Error(receiptError.message);
 
-  const receipts = (receiptRows ?? []).map((row) =>
-    normalizeReceipt(row as Record<string, unknown>),
-  );
+  const filterActive = Boolean(filters?.chains?.length || filters?.platforms?.length);
+  const filteredSessionIds = filterActive
+    ? new Set((receiptRows ?? []).map((r) => String(r.session_id_onchain)))
+    : null;
 
-  const sessionsCount = receipts.length;
-  const totalSecondsVerified = sumNumbers(
-    receipts.map((receipt) => receipt.seconds_verified),
+  const [sessions, ticks] = await Promise.all([
+    selectSessions({ userWallet: normalizedWallet }),
+    selectTicks({ userWallet: normalizedWallet }),
+  ]);
+
+  const scopedTicks = filteredSessionIds
+    ? ticks.filter((tick) => filteredSessionIds.has(tick.session_id_onchain))
+    : ticks;
+  const sessionIds = new Set(
+    scopedTicks.map((tick) => tick.session_id_onchain),
+  );
+  // Sessions that exist on-chain but haven't streamed ticks yet still count
+  // as observed activity once they ended with verified seconds.
+  for (const session of sessions) {
+    if (filteredSessionIds && !filteredSessionIds.has(session.session_id_onchain)) {
+      continue;
+    }
+    if (session.seconds_verified > 0) {
+      sessionIds.add(session.session_id_onchain);
+    }
+  }
+
+  const secondsBySession = new Map<string, number>();
+  for (const tick of scopedTicks) {
+    secondsBySession.set(
+      tick.session_id_onchain,
+      (secondsBySession.get(tick.session_id_onchain) ?? 0) +
+        tick.seconds_elapsed,
+    );
+  }
+  for (const session of sessions) {
+    if (filteredSessionIds && !filteredSessionIds.has(session.session_id_onchain)) {
+      continue;
+    }
+    const fromTicks = secondsBySession.get(session.session_id_onchain) ?? 0;
+    secondsBySession.set(
+      session.session_id_onchain,
+      Math.max(fromTicks, session.seconds_verified),
+    );
+  }
+
+  const sessionsCount = sessionIds.size;
+  const totalSecondsVerified = Array.from(secondsBySession.values()).reduce(
+    (sum, seconds) => sum + seconds,
+    0,
   );
   const consistencyRate = sessionsCount
-    ? receipts.filter(
-        (receipt) => receipt.seconds_verified >= ATTENTION_CONSISTENCY_MIN_SECONDS,
+    ? Array.from(secondsBySession.values()).filter(
+        (seconds) => seconds >= ATTENTION_CONSISTENCY_MIN_SECONDS,
       ).length / sessionsCount
     : 0;
 
   let categoryDiversity = 0;
-  if (receipts.length) {
+  if (sessionsCount) {
     const campaignIds = Array.from(
-      new Set(receipts.map((receipt) => receipt.campaign_id_onchain)),
+      new Set(
+        sessions
+          .filter((session) => sessionIds.has(session.session_id_onchain))
+          .map((session) => session.campaign_id_onchain),
+      ),
     );
-    const { data: campaignRows, error: campaignError } = await supabase
-      .from("campaigns")
-      .select("campaign_id_onchain, target_preferences")
-      .in("campaign_id_onchain", campaignIds);
-    if (campaignError) throw new Error(campaignError.message);
+    if (campaignIds.length) {
+      const { data: campaignRows, error: campaignError } = await supabase
+        .from("campaigns")
+        .select("campaign_id_onchain, target_preferences")
+        .in("campaign_id_onchain", campaignIds);
+      if (campaignError) throw new Error(campaignError.message);
 
-    const categorySet = new Set<string>();
-    for (const row of campaignRows ?? []) {
-      const prefs = (row.target_preferences as PreferenceOption[] | null) ?? [];
-      const primary = prefs[0];
-      if (primary) categorySet.add(primary);
+      const categorySet = new Set<string>();
+      for (const row of campaignRows ?? []) {
+        const prefs =
+          (row.target_preferences as PreferenceOption[] | null) ?? [];
+        const primary = prefs[0];
+        if (primary) categorySet.add(primary);
+      }
+      categoryDiversity = categorySet.size;
     }
-    categoryDiversity = categorySet.size;
   }
 
   const totalSecondsScore = clamp01(

@@ -21,8 +21,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { fetchJson } from "@/lib/http";
+import { preferenceLabels } from "@/lib/constants";
 import { USDC_DECIMALS } from "@/lib/solana";
-import type { UserDashboardData } from "@/lib/types";
+import type { PreferenceOption, UserDashboardData } from "@/lib/types";
 import { useVistaProgram } from "@/lib/use-vista-program";
 import { useVistaWallet } from "@/lib/use-vista-wallet";
 import { fetchUserBalance, withdraw } from "@/lib/vista-actions";
@@ -247,8 +248,12 @@ export default function UserDashboardPage() {
         <StatCard
           icon={Flame}
           title="Favorite category"
-          value={0}
-          hint={data.stats.favoriteAdCategory}
+          value={
+            preferenceLabels[
+              data.stats.favoriteAdCategory as PreferenceOption
+            ] ?? data.stats.favoriteAdCategory
+          }
+          hint="Based on time-weighted attention"
         />
       </div>
 

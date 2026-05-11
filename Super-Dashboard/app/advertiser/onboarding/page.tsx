@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
+import { useChainId } from "wagmi";
 
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -11,17 +12,35 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EVM_CHAINS, type SupportedEvmChainKey } from "@/lib/evm/chains";
 import { fetchJson } from "@/lib/http";
 import { useEvmAuth } from "@/lib/use-evm-auth";
 import { useVistaWallet } from "@/lib/use-vista-wallet";
+import { cn } from "@/lib/utils";
 
 type Identity =
   | { kind: "solana"; address: string }
   | { kind: "evm"; address: `0x${string}`; token: string | null };
 
+const EVM_CHAIN_ORDER: SupportedEvmChainKey[] = [
+  "base-sepolia",
+  "arbitrum-sepolia",
+  "optimism-sepolia",
+  "polygon-amoy",
+  "monad-testnet",
+];
+
 export default function AdvertiserOnboardingPage() {
   const { address: solanaAddress } = useVistaWallet();
   const evm = useEvmAuth();
+  const currentChainId = useChainId();
+
+  const activeChainMeta = useMemo(() => {
+    const key = EVM_CHAIN_ORDER.find(
+      (k) => EVM_CHAINS[k].chain.id === currentChainId,
+    );
+    return key ? EVM_CHAINS[key] : null;
+  }, [currentChainId]);
 
   const [companyName, setCompanyName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -96,38 +115,44 @@ export default function AdvertiserOnboardingPage() {
 
       <Card className="max-w-2xl">
         <CardContent className="space-y-4 p-6">
-          <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
-            Choose identity
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
+              Choose identity
+            </p>
+            {!evm.address ? (
+              <ConnectButton chainStatus="icon" showBalance={false} />
+            ) : null}
+          </div>
 
-          <div className="flex flex-wrap gap-3">
-            <Button
-              type="button"
-              variant={
-                identity?.kind === "solana" ? "default" : "outline"
-              }
-              onClick={() => setPreferred("solana")}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <WalletOptionCard
+              kind="solana"
+              active={identity?.kind === "solana"}
+              connected={Boolean(solanaAddress)}
+              title="Solana"
+              subtitle="Native rewards on Solana devnet"
+              address={solanaAddress}
               disabled={!solanaAddress}
-            >
-              {solanaAddress
-                ? `Solana ${truncate(solanaAddress)}`
-                : "Solana (not connected)"}
-            </Button>
+              onSelect={() => setPreferred("solana")}
+            />
+            <WalletOptionCard
+              kind="evm"
+              active={identity?.kind === "evm"}
+              connected={Boolean(evm.address)}
+              title="EVM"
+              subtitle={activeChainMeta ? activeChainMeta.label : "Base / Arb / OP / Polygon / Monad"}
+              address={evm.address}
+              disabled={!evm.address}
+              onSelect={() => setPreferred("evm")}
+            />
+          </div>
 
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant={identity?.kind === "evm" ? "default" : "outline"}
-                onClick={() => setPreferred("evm")}
-                disabled={!evm.address}
-              >
-                {evm.address
-                  ? `EVM ${truncate(evm.address)}`
-                  : "EVM (connect below)"}
-              </Button>
+          {evm.address ? (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+              <span>Manage EVM wallet & chain</span>
               <ConnectButton chainStatus="icon" showBalance={false} />
             </div>
-          </div>
+          ) : null}
 
           {identity?.kind === "evm" && !identity.token ? (
             <div className="flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-300">
@@ -190,4 +215,71 @@ function truncate(addr: string, head = 6, tail = 4) {
   if (!addr) return "";
   if (addr.length <= head + tail + 3) return addr;
   return `${addr.slice(0, head)}…${addr.slice(-tail)}`;
+}
+
+function WalletOptionCard({
+  kind,
+  active,
+  connected,
+  title,
+  subtitle,
+  address,
+  disabled,
+  onSelect,
+}: {
+  kind: "solana" | "evm";
+  active: boolean;
+  connected: boolean;
+  title: string;
+  subtitle: string;
+  address: string | undefined;
+  disabled?: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      disabled={disabled}
+      className={cn(
+        "group flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition-colors",
+        active
+          ? "border-primary bg-primary/5"
+          : "border-border/70 bg-background/70 hover:border-border",
+        disabled && "opacity-60",
+      )}
+    >
+      <div
+        className={cn(
+          "flex size-10 shrink-0 items-center justify-center rounded-xl border",
+          active
+            ? "border-primary/40 bg-primary/10 text-primary"
+            : "border-border/70 bg-background text-foreground",
+        )}
+      >
+        <span className="text-[10px] font-semibold tracking-wider">
+          {kind === "solana" ? "SOL" : "EVM"}
+        </span>
+      </div>
+      <div className="flex-1 space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-medium">{title}</p>
+          {connected ? (
+            <Badge variant="outline" className="gap-1 text-emerald-400">
+              <span className="size-1.5 rounded-full bg-emerald-400" />
+              Connected
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-muted-foreground">
+              Not connected
+            </Badge>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">{subtitle}</p>
+        <p className="font-mono text-xs text-muted-foreground">
+          {address ? truncate(address, 6, 4) : "—"}
+        </p>
+      </div>
+    </button>
+  );
 }

@@ -39,34 +39,48 @@ export default function VistaEarningsPanel({
   validSeconds = 0,
   isTracking = false,
 }) {
+  // vistaState is optional — when a parent (e.g. ad zone) is wired up it
+  // gives us instant per-tick deltas for the flash animation. The rest of
+  // the panel drives entirely from Supabase so the values stay realtime
+  // regardless of whether this prop is passed.
   const {
-    earnings = totalEarned,
-    validSeconds: vistaValidSeconds = validSeconds,
-    isActive = isTracking,
     flagged = false,
-    tickAmount = 0,
+    tickAmount: parentTick = 0,
   } = vistaState ?? {};
 
-  const [displaySeconds, setDisplaySeconds] = useState(vistaValidSeconds);
   const [flash, setFlash] = useState(false);
-  const finalEarnings = earnings || totalEarned;
 
-  // Historical stats fetched from Supabase
+  // Aggregated state pulled from Supabase + kept in sync via Realtime.
   const [stats, setStats] = useState({
+    currentSession: 0,
+    currentSessionSeconds: 0,
+    isActive: isTracking,
     lastSession: 0,
-    total: 0,
-    unclaimed: 0,
+    total: totalEarned,
+    unclaimed: totalEarned,
     loading: true,
   });
   const latestSessionIdRef = useRef(null);
 
+  // Live "seconds since last tick" — increments each second while the
+  // session is active so the counter doesn't sit between oracle ticks.
+  const [liveSecondsOffset, setLiveSecondsOffset] = useState(0);
+
   // ── Supabase fetch + Realtime ──────────────────────────────
   useEffect(() => {
-    // Solana base58 pubkeys are case-sensitive — lowercasing here drops
-    // the row match because user_wallet is stored case-correctly upstream.
+    // Solana base58 pubkeys are case-sensitive — keep the wallet exactly as
+    // stored upstream.
     const wallet = userWallet?.trim();
     if (!wallet) {
-      setStats({ lastSession: 0, total: 0, unclaimed: 0, loading: false });
+      setStats({
+        currentSession: 0,
+        currentSessionSeconds: 0,
+        isActive: false,
+        lastSession: 0,
+        total: 0,
+        unclaimed: 0,
+        loading: false,
+      });
       return;
     }
 
@@ -79,51 +93,78 @@ export default function VistaEarningsPanel({
     let cancelled = false;
 
     async function loadStats() {
-      // 1. Latest session
-      const { data: session } = await supabase
-        .from("sessions")
-        .select("session_id_onchain, seconds_verified")
-        .eq("user_wallet", wallet)
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      try {
+        // 1. Latest session for this wallet (any status — we want the
+        //    "current/last session" pane to reflect what just happened
+        //    even if the session has already ended).
+        const { data: session } = await supabase
+          .from("sessions")
+          .select("session_id_onchain, active, seconds_verified")
+          .eq("user_wallet", wallet)
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-      if (cancelled) return;
+        const latestId = session?.session_id_onchain ?? null;
+        latestSessionIdRef.current = latestId;
+        const isActive = Boolean(session?.active);
+        const sessionSecondsVerified = Number(session?.seconds_verified ?? 0);
 
-      const latestId = session?.session_id_onchain ?? null;
-      latestSessionIdRef.current = latestId;
+        // 2. Stream ticks for the latest session — canonical source for
+        //    "current session" earnings + seconds.
+        let currentSession = 0;
+        let currentSessionSeconds = 0;
+        if (latestId) {
+          const { data: sessionTicks } = await supabase
+            .from("stream_ticks")
+            .select("user_amount, seconds_elapsed")
+            .eq("session_id_onchain", latestId);
+          for (const t of sessionTicks ?? []) {
+            currentSession += Number(t.user_amount ?? 0);
+            currentSessionSeconds += Number(t.seconds_elapsed ?? 0);
+          }
+          currentSessionSeconds = Math.max(
+            currentSessionSeconds,
+            sessionSecondsVerified,
+          );
+        }
 
-      // 2. Last-session earnings
-      let lastSession = 0;
-      if (latestId) {
-        const { data: sessionTicks } = await supabase
+        // 3. All-time earnings across every session for this wallet.
+        const { data: allTicks } = await supabase
           .from("stream_ticks")
           .select("user_amount")
-          .eq("session_id_onchain", latestId);
-        lastSession = (sessionTicks ?? []).reduce(
+          .eq("user_wallet", wallet);
+        const total = (allTicks ?? []).reduce(
           (sum, t) => sum + Number(t.user_amount ?? 0),
           0,
         );
-      }
 
-      // 3. All-time earnings
-      const { data: allTicks } = await supabase
-        .from("stream_ticks")
-        .select("user_amount")
-        .eq("user_wallet", wallet);
-      const total = (allTicks ?? []).reduce(
-        (sum, t) => sum + Number(t.user_amount ?? 0),
-        0,
-      );
-
-      if (!cancelled) {
-        setStats({ lastSession, total, unclaimed: total, loading: false });
+        if (cancelled) return;
+        setStats({
+          currentSession,
+          currentSessionSeconds,
+          isActive,
+          // For the "Last Session" cell we surface what they just earned
+          // in the most recent session, regardless of whether it's still
+          // open. This mirrors the live "Current Session" counter and is
+          // what a viewer expects to see.
+          lastSession: currentSession,
+          total,
+          unclaimed: total,
+          loading: false,
+        });
+        setLiveSecondsOffset(0);
+      } catch (err) {
+        console.warn("[VistaEarningsPanel] loadStats failed:", err);
+        if (!cancelled) {
+          setStats((s) => ({ ...s, loading: false }));
+        }
       }
     }
 
     void loadStats();
 
-    // Live updates: new ticks inserted while the panel is open
+    // Realtime channel: subscribe to ticks and sessions for this wallet.
     const channel = supabase
       .channel(`vista-panel-${wallet}`)
       .on(
@@ -131,15 +172,67 @@ export default function VistaEarningsPanel({
         { event: "INSERT", schema: "public", table: "stream_ticks" },
         (payload) => {
           const row = payload.new;
-          if (row.user_wallet !== wallet) return;
+          if (!row || row.user_wallet !== wallet) return;
           const amount = Number(row.user_amount ?? 0);
-          const isLatest = row.session_id_onchain === latestSessionIdRef.current;
+          const seconds = Number(row.seconds_elapsed ?? 0);
+          const isLatest =
+            row.session_id_onchain === latestSessionIdRef.current;
+
           setStats((s) => ({
             ...s,
-            lastSession: isLatest ? s.lastSession + amount : s.lastSession,
+            currentSession: isLatest
+              ? s.currentSession + amount
+              : // Tick belongs to a session that started AFTER the one we
+                // had cached — treat it as the new "current".
+                amount,
+            currentSessionSeconds: isLatest
+              ? s.currentSessionSeconds + seconds
+              : seconds,
+            lastSession: isLatest ? s.lastSession + amount : amount,
             total: s.total + amount,
             unclaimed: s.unclaimed + amount,
+            isActive: true,
           }));
+          if (!isLatest) {
+            latestSessionIdRef.current = row.session_id_onchain;
+          }
+          setLiveSecondsOffset(0);
+          setFlash(true);
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "sessions",
+          filter: `user_wallet=eq.${wallet}`,
+        },
+        (payload) => {
+          const row = payload.new ?? payload.old;
+          if (!row) return;
+          // A brand-new session for this wallet — switch the latest ref
+          // so subsequent ticks accrue into a fresh "Current Session".
+          if (
+            payload.eventType === "INSERT" &&
+            row.session_id_onchain !== latestSessionIdRef.current
+          ) {
+            latestSessionIdRef.current = row.session_id_onchain;
+            setStats((s) => ({
+              ...s,
+              currentSession: 0,
+              currentSessionSeconds: 0,
+              lastSession: 0,
+              isActive: Boolean(row.active),
+            }));
+            setLiveSecondsOffset(0);
+            return;
+          }
+
+          // Status flipped on the current session.
+          if (row.session_id_onchain === latestSessionIdRef.current) {
+            setStats((s) => ({ ...s, isActive: Boolean(row.active) }));
+          }
         },
       )
       .subscribe();
@@ -150,29 +243,31 @@ export default function VistaEarningsPanel({
     };
   }, [userWallet]);
 
-  // ── Live second counter ───────────────────────────────────
+  // ── Flash animation: any new tick (Supabase or parent SDK) ───────
   useEffect(() => {
-    setDisplaySeconds(vistaValidSeconds || validSeconds);
-  }, [vistaValidSeconds, validSeconds]);
+    if (!flash) return;
+    const id = setTimeout(() => setFlash(false), 600);
+    return () => clearTimeout(id);
+  }, [flash]);
 
   useEffect(() => {
-    if (!isActive) return;
-    const id = setInterval(() => setDisplaySeconds((s) => s + 1), 1000);
+    if (parentTick > 0) setFlash(true);
+  }, [parentTick]);
+
+  // ── Live second counter between ticks ─────────────────────────
+  useEffect(() => {
+    if (!stats.isActive) return;
+    const id = setInterval(() => setLiveSecondsOffset((s) => s + 1), 1000);
     return () => clearInterval(id);
-  }, [isActive]);
-
-  // ── Earn flash ────────────────────────────────────────────
-  useEffect(() => {
-    if (tickAmount === 0) return;
-    setFlash(true);
-    const t = setTimeout(() => setFlash(false), 600);
-    return () => clearTimeout(t);
-  }, [tickAmount]);
+  }, [stats.isActive]);
 
   // ── Animated stat values ──────────────────────────────────
+  const animCurrent = useCountUp(stats.currentSession);
   const animLastSession = useCountUp(stats.lastSession);
-  const animTotal       = useCountUp(stats.total);
-  const animUnclaimed   = useCountUp(stats.unclaimed);
+  const animTotal = useCountUp(stats.total);
+  const animUnclaimed = useCountUp(stats.unclaimed);
+
+  const displaySeconds = stats.currentSessionSeconds + liveSecondsOffset;
 
   // ── No wallet ─────────────────────────────────────────────
   if (!userWallet) {
@@ -205,12 +300,12 @@ export default function VistaEarningsPanel({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="relative flex h-2 w-2">
-            {isActive && (
+            {stats.isActive && (
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
             )}
             <span
               className={`relative inline-flex rounded-full h-2 w-2 ${
-                isActive ? "bg-green-500" : "bg-zinc-600"
+                stats.isActive ? "bg-green-500" : "bg-zinc-600"
               }`}
             />
           </span>
@@ -223,8 +318,9 @@ export default function VistaEarningsPanel({
         )}
       </div>
 
-      {/* Live session earnings */}
-      {(isActive || finalEarnings > 0) && (
+      {/* Current session earnings — always shown when there's a session,
+          regardless of whether vistaState was passed. */}
+      {(stats.isActive || stats.currentSession > 0) && (
         <div>
           <p className="text-xs uppercase tracking-wider text-green-400">
             Current Session
@@ -234,9 +330,7 @@ export default function VistaEarningsPanel({
               flash ? "text-green-300" : "text-white"
             }`}
           >
-            {typeof finalEarnings === "number"
-              ? finalEarnings.toFixed(6)
-              : "0.000000"}{" "}
+            {animCurrent.toFixed(6)}{" "}
             <span className="text-sm text-zinc-400">USDC</span>
           </p>
         </div>
@@ -283,12 +377,19 @@ export default function VistaEarningsPanel({
       </div>
 
       {/* Live tracking footer */}
-      {isActive && (
+      {stats.isActive && (
         <div className="border-t border-white/5 pt-3 text-xs text-zinc-400">
           <p className="flex items-center gap-2">
             <span className="inline-flex h-2 w-2 rounded-full bg-green-400 animate-pulse" />
             Attention verified • {displaySeconds}s tracked
           </p>
+        </div>
+      )}
+
+      {/* Idle state — keep validSeconds visible if a parent passed one */}
+      {!stats.isActive && (validSeconds > 0 || stats.currentSessionSeconds > 0) && (
+        <div className="border-t border-white/5 pt-3 text-xs text-zinc-500">
+          Last session ran for {stats.currentSessionSeconds || validSeconds}s.
         </div>
       )}
     </div>
