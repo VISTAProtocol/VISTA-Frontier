@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   Connection,
   PublicKey,
@@ -17,9 +16,8 @@ const VISTA_BRIDGE_PROGRAM_ID = new PublicKey(
   "9R7UWcCQVXW4dKKLYLLRfGQf5prePQBMyTEwd2TMC8sE",
 );
 
-function disc(name: string): Buffer {
-  return createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
-}
+// Anchor discriminator for `global:bridge_withdraw`
+const BRIDGE_WITHDRAW_DISC = Buffer.from([250, 99, 215, 166, 81, 93, 185, 229]);
 
 /// PDA seeded with `bridge_balance_v2` matching the post-escrow on-chain
 /// layout. The old `bridge_balance` PDAs are orphaned but inert.
@@ -106,7 +104,7 @@ export async function bridgeWithdraw(
       { pubkey: beneficiaryToken, isSigner: false, isWritable: true },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
-    data: disc("bridge_withdraw"),
+    data: BRIDGE_WITHDRAW_DISC,
   });
 
   const { blockhash, lastValidBlockHeight } =
