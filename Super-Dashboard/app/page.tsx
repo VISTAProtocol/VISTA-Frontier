@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, ExternalLink } from "lucide-react";
+import { ArrowRight, ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -118,9 +118,14 @@ const roleCards: Record<
   },
 };
 
+const roleOrder: RoleName[] = ["user", "advertiser", "publisher", "oracle"];
+const CAROUSEL_AUTOPLAY_MS = 5000;
+
 export default function HomePage() {
   const router = useRouter();
-  const [activeRole, setActiveRole] = useState<RoleName>("advertiser");
+  const [activeRole, setActiveRole] = useState<RoleName>("user");
+  const [slideDirection, setSlideDirection] = useState<1 | -1>(1);
+  const [carouselPaused, setCarouselPaused] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [counter, setCounter] = useState(0.00341);
@@ -130,6 +135,18 @@ export default function HomePage() {
   >([]);
   const trailIdRef = useRef(0);
   const lastTrailStampRef = useRef(0);
+
+  useEffect(() => {
+    if (carouselPaused) return;
+    const timeout = window.setTimeout(() => {
+      const currentIdx = roleOrder.indexOf(activeRole);
+      const nextIdx = (currentIdx + 1) % roleOrder.length;
+      setSlideDirection(1);
+      setActiveRole(roleOrder[nextIdx]);
+      setImageLoaded(false);
+    }, CAROUSEL_AUTOPLAY_MS);
+    return () => window.clearTimeout(timeout);
+  }, [activeRole, carouselPaused]);
 
   function startStreaming() {
     setStreaming(true);
@@ -258,8 +275,26 @@ export default function HomePage() {
               </div>
 
               <div className="flex flex-wrap gap-3">
-                <Button size="lg" variant="outline">
-                  <Link href="#roles">Explore Roles</Link>
+                <Button
+                  size="lg"
+                  className="group relative overflow-hidden bg-gradient-to-r from-primary via-primary to-primary/80 px-6 font-semibold text-primary-foreground shadow-lg shadow-primary/30 ring-1 ring-primary/40 transition-all duration-300 hover:scale-[1.03] hover:shadow-xl hover:shadow-primary/50 focus-visible:ring-2 focus-visible:ring-primary/60 motion-safe:animate-[pulse_2.4s_ease-in-out_infinite]"
+                >
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent transition-transform duration-700 ease-out group-hover:translate-x-full"
+                  />
+                  <Link
+                    href="#roles"
+                    className="relative inline-flex items-center gap-2"
+                  >
+                    Explore Roles
+                    <span
+                      aria-hidden
+                      className="inline-block transition-transform duration-300 group-hover:translate-x-1"
+                    >
+                      →
+                    </span>
+                  </Link>
                 </Button>
                 <Button size="lg" variant="outline">
                   <Link href="#docs">Read the Docs</Link>
@@ -446,88 +481,192 @@ export default function HomePage() {
             into your dashboard.
           </p>
 
-          <div className="mt-6 flex flex-wrap gap-2">
-            {(["advertiser", "publisher", "user", "oracle"] as RoleName[]).map(
-              (role) => (
-                <Button
-                  key={role}
-                  variant={activeRole === role ? "default" : "outline"}
-                  onClick={() => {
-                    setActiveRole(role);
-                    setImageLoaded(false);
-                  }}
-                >
-                  {roleCards[role].tab}
-                </Button>
-              ),
-            )}
-          </div>
-
-          <Card className="p-2 mt-6 overflow-hidden rounded-[24px] border-border/70 bg-[linear-gradient(180deg,transparent,rgba(255,255,255,0.55))] dark:bg-[linear-gradient(180deg,transparent,rgba(18,24,30,0.72))]">
-            <div className="grid h-full md:grid-cols-[280px_1fr] lg:grid-cols-[320px_1fr]">
-              <div className="relative min-h-[280px] rounded-[20px] overflow-hidden border-b border-border/70 bg-background/50 md:min-h-full">
-                <Image
-                  src={roleCards[activeRole].icon}
-                  alt={`${roleCards[activeRole].tab} illustration`}
-                  fill
-                  sizes="280px"
-                  className="object-cover"
-                  priority
-                  onLoad={() => setImageLoaded(true)}
-                />
-                {!imageLoaded && (
-                  <Skeleton className="absolute inset-0 z-10 rounded-none" />
-                )}
-              </div>
-              <div className="flex flex-col md:mt-0 mt-4">
-                <CardHeader>
-                  <div className="space-y-3">
-                    <Badge variant="outline">
-                      {roleCards[activeRole].badge}
-                    </Badge>
-                    <CardTitle className="text-2xl">
-                      {roleCards[activeRole].title}
-                    </CardTitle>
-                    <CardDescription className="text-base">
-                      {roleCards[activeRole].sub}
-                    </CardDescription>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {roleCards[activeRole].metrics.map((metric) => (
-                      <div
-                        key={metric.label}
-                        className="rounded-xl border border-border/70 bg-background/75 p-3"
+          {(() => {
+            const activeIndex = roleOrder.indexOf(activeRole);
+            const goToRole = (next: RoleName) => {
+              const nextIdx = roleOrder.indexOf(next);
+              if (nextIdx === activeIndex) return;
+              setSlideDirection(nextIdx > activeIndex ? 1 : -1);
+              setActiveRole(next);
+              setImageLoaded(false);
+            };
+            const goStep = (step: 1 | -1) => {
+              const nextIdx =
+                (activeIndex + step + roleOrder.length) % roleOrder.length;
+              setSlideDirection(step);
+              setActiveRole(roleOrder[nextIdx]);
+              setImageLoaded(false);
+            };
+            const role = roleCards[activeRole];
+            return (
+              <div
+                onMouseEnter={() => setCarouselPaused(true)}
+                onMouseLeave={() => setCarouselPaused(false)}
+                onFocusCapture={() => setCarouselPaused(true)}
+                onBlurCapture={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setCarouselPaused(false);
+                  }
+                }}
+              >
+                <div className="mt-6 flex flex-wrap items-center gap-3">
+                  <div className="relative inline-grid grid-cols-4 rounded-full border border-border/70 bg-muted/50 p-1 shadow-inner">
+                    <div
+                      aria-hidden
+                      className="pointer-events-none absolute top-1 bottom-1 left-1 rounded-full bg-primary shadow-sm shadow-primary/30 transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                      style={{
+                        width: "calc((100% - 0.5rem) / 4)",
+                        transform: `translateX(${activeIndex * 100}%)`,
+                      }}
+                    />
+                    {roleOrder.map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => goToRole(r)}
+                        className={cn(
+                          "relative z-10 rounded-full px-4 py-2 text-sm font-medium transition-colors duration-300",
+                          activeRole === r
+                            ? "text-primary-foreground"
+                            : "text-muted-foreground hover:text-foreground",
+                        )}
                       >
-                        <p className="text-base font-semibold tracking-tight">
-                          {metric.value}
-                        </p>
-                        <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                          {metric.label}
-                        </p>
-                      </div>
+                        {roleCards[r].tab}
+                      </button>
                     ))}
                   </div>
-                  <ul className="space-y-2 text-sm text-muted-foreground">
-                    {roleCards[activeRole].bullets.map((bullet) => (
-                      <li key={bullet} className="flex items-start gap-2">
-                        <span className="mt-2 size-1.5 rounded-full bg-primary" />
-                        <span>{bullet}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <Button
-                    className="w-full"
-                    onClick={() => handleEnterRole(activeRole)}
+                  <div className="ml-auto flex items-center gap-2">
+                    <button
+                      type="button"
+                      aria-label="Previous role"
+                      onClick={() => goStep(-1)}
+                      className="inline-flex size-9 items-center justify-center rounded-full border border-border/70 bg-background/80 text-foreground transition-all duration-200 hover:scale-105 hover:bg-muted hover:shadow-md"
+                    >
+                      <ChevronLeft className="size-4" />
+                    </button>
+                    <div className="flex items-center gap-1.5">
+                      {roleOrder.map((r, i) => (
+                        <span
+                          key={r}
+                          aria-hidden
+                          className={cn(
+                            "h-1.5 rounded-full transition-all duration-500 ease-out",
+                            i === activeIndex
+                              ? cn(
+                                  "w-6 bg-primary",
+                                  !carouselPaused &&
+                                    "motion-safe:animate-pulse",
+                                )
+                              : "w-1.5 bg-border",
+                          )}
+                        />
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="Next role"
+                      onClick={() => goStep(1)}
+                      className="inline-flex size-9 items-center justify-center rounded-full border border-border/70 bg-background/80 text-foreground transition-all duration-200 hover:scale-105 hover:bg-muted hover:shadow-md"
+                    >
+                      <ChevronRight className="size-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative mt-6 overflow-hidden rounded-[24px]">
+                  <div
+                    aria-hidden
+                    className="absolute inset-x-0 top-0 z-20 h-0.5 origin-left bg-primary/70"
+                    key={`progress-${activeRole}-${carouselPaused ? "p" : "r"}`}
+                    style={{
+                      animation: carouselPaused
+                        ? "none"
+                        : `vista-carousel-progress ${CAROUSEL_AUTOPLAY_MS}ms linear forwards`,
+                      transform: carouselPaused ? "scaleX(0)" : undefined,
+                      transition: carouselPaused
+                        ? "transform 200ms ease-out"
+                        : undefined,
+                    }}
+                  />
+                  <Card
+                    key={activeRole}
+                    className={cn(
+                      "p-2 overflow-hidden rounded-[24px] border-border/70 bg-[linear-gradient(180deg,transparent,rgba(255,255,255,0.55))] dark:bg-[linear-gradient(180deg,transparent,rgba(18,24,30,0.72))]",
+                      "animate-in fade-in duration-500 ease-out",
+                      slideDirection === 1
+                        ? "slide-in-from-right-8"
+                        : "slide-in-from-left-8",
+                    )}
                   >
-                    {roleCards[activeRole].cta}
-                    <ArrowRight className="size-4" />
-                  </Button>
-                </CardContent>
+                    <div className="grid h-full md:grid-cols-[280px_1fr] lg:grid-cols-[320px_1fr]">
+                      <div className="relative min-h-[280px] rounded-[20px] overflow-hidden border-b border-border/70 bg-background/50 md:min-h-full">
+                        <Image
+                          src={role.icon}
+                          alt={`${role.tab} illustration`}
+                          fill
+                          sizes="280px"
+                          className="object-cover transition-transform duration-700 ease-out hover:scale-[1.04]"
+                          priority
+                          onLoad={() => setImageLoaded(true)}
+                        />
+                        {!imageLoaded && (
+                          <Skeleton className="absolute inset-0 z-10 rounded-none" />
+                        )}
+                      </div>
+                      <div className="flex flex-col md:mt-0 mt-4">
+                        <CardHeader>
+                          <div className="space-y-3">
+                            <Badge variant="outline">{role.badge}</Badge>
+                            <CardTitle className="text-2xl">
+                              {role.title}
+                            </CardTitle>
+                            <CardDescription className="text-base">
+                              {role.sub}
+                            </CardDescription>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-5">
+                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                            {role.metrics.map((metric) => (
+                              <div
+                                key={metric.label}
+                                className="rounded-xl border border-border/70 bg-background/75 p-3"
+                              >
+                                <p className="text-base font-semibold tracking-tight">
+                                  {metric.value}
+                                </p>
+                                <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                                  {metric.label}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                          <ul className="space-y-2 text-sm text-muted-foreground">
+                            {role.bullets.map((bullet) => (
+                              <li
+                                key={bullet}
+                                className="flex items-start gap-2"
+                              >
+                                <span className="mt-2 size-1.5 rounded-full bg-primary" />
+                                <span>{bullet}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          <Button
+                            className="w-full"
+                            onClick={() => handleEnterRole(activeRole)}
+                          >
+                            {role.cta}
+                            <ArrowRight className="size-4" />
+                          </Button>
+                        </CardContent>
+                      </div>
+                    </div>
+                  </Card>
+                </div>
               </div>
-            </div>
-          </Card>
+            );
+          })()}
         </section>
 
         <section

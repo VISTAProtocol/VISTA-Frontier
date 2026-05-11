@@ -145,3 +145,12 @@
     font-family: var(--font-sans);
   }
 }
+
+@keyframes vista-carousel-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
